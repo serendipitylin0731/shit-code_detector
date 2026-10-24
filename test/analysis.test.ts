@@ -20,6 +20,21 @@ test('重复格式问题保留明细但聚合上限阻止其淹没真实缺陷',
   assert.equal(result.findings.filter(item => item.rule === 'trailing-space').length, 250);
 });
 
+test('运算符结尾允许一个空格，两个空格或 Tab 仍算行尾多余空白', () => {
+  const source = [
+    'const a = ',
+    'const b =  ',
+    'const c =\t',
+    'const d = 1; ',
+    'const e = 1; // comment + '
+  ].join('\n');
+  const js = analyze([file('spacing.ts', source)], [], false);
+  assert.deepEqual(js.findings.filter(item => item.rule === 'trailing-space').map(item => item.line), [2, 3, 4, 5]);
+
+  const python = analyze([file('spacing.py', 'value = left // \nvalue = left //  \nvalue = 1 # comment + ')], [], false);
+  assert.deepEqual(python.findings.filter(item => item.rule === 'trailing-space').map(item => item.line), [2, 3]);
+});
+
 test('架构规则只在项目模式运行，跨文件缩进不一致可定位', () => {
   const long = Array.from({ length: 851 }, () => 'pass').join('\n');
   const tabs = '\tfoo\n\tbar\n\tbaz\n\tqux';

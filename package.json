@@ -2,7 +2,7 @@
   "name": "shit-code-detector",
   "displayName": "Shit Code Detector",
   "description": "对多语言代码库进行可解释的 0–9 分质量分析",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "serendipitylin0731",
   "author": "_serendipity",
   "license": "MIT",

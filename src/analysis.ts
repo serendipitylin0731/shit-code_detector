@@ -72,6 +72,15 @@ export function languageOf(filePath: string): string | undefined {
   return specialNames[base] ?? languageByExtension[path.extname(base).toLowerCase()];
 }
 
+function endsWithOperator(code: string, language: string): boolean {
+  // A trailing comment is prose, even when its last character resembles an operator.
+  if (/\/\*|<!--/.test(code)) return false;
+  if (language !== 'Python' && /\/\//.test(code)) return false;
+  if (['Python', 'Shell', 'Ruby', 'Perl', 'R', 'YAML', 'TOML'].includes(language) && /#/.test(code)) return false;
+  if (language === 'SQL' && /(?:^|\s)--/.test(code)) return false;
+  return /(?:[+*/%=<>!&|^~?-]|\b(?:and|or|not|in|is|as|instanceof))$/i.test(code);
+}
+
 export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = true): Analysis {
   const findings: Finding[] = [];
   const add = (file: string, line: number | undefined, category: Category, rule: string, points: number, message: string): void => {
@@ -113,7 +122,11 @@ export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = 
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index];
       const number = index + 1;
-      if (/\s+$/.test(line) && line.trim().length > 0) add(file.path, number, 'style', 'trailing-space', 1, '行尾存在多余空白');
+      const trailingWhitespace = line.match(/\s+$/)?.[0];
+      if (trailingWhitespace && line.trim().length > 0 &&
+          !(trailingWhitespace === ' ' && endsWithOperator(line.slice(0, -1), file.language))) {
+        add(file.path, number, 'style', 'trailing-space', 1, '行尾存在多余空白');
+      }
       const indent = line.match(/^[ \t]*/)?.[0] ?? '';
       if (file.language !== 'Makefile' && indent.includes(' ') && indent.includes('\t')) {
         add(file.path, number, 'style', 'mixed-indent', 2, '同一行缩进混用 Tab 与空格');
