@@ -2,7 +2,7 @@
   "name": "shit-code-detector",
   "displayName": "Shit Code Detector",
   "description": "对多语言代码库进行可解释、分数无上限的质量分析",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "serendipitylin0731",
   "author": "_serendipity",
   "license": "MIT",
@@ -11,22 +11,35 @@
   "categories": ["Linters", "Other"],
   "main": "./dist/src/extension.js",
   "activationEvents": [
+    "onView:shitCodeDetector.dashboard",
     "onCommand:shitCodeDetector.scanWorkspace",
     "onCommand:shitCodeDetector.scanFiles",
     "onCommand:shitCodeDetector.scanRepository",
-    "onCommand:shitCodeDetector.setApiKey"
+    "onCommand:shitCodeDetector.setApiKey",
+    "onCommand:shitCodeDetector.openAiConfig"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "shitCodeDetector", "title": "Shit Code Detector", "icon": "media/sidebar.svg" }
+      ]
+    },
+    "views": {
+      "shitCodeDetector": [
+        { "id": "shitCodeDetector.dashboard", "name": "代码评分", "type": "webview" }
+      ]
+    },
     "commands": [
       { "command": "shitCodeDetector.scanWorkspace", "title": "Shit Code Detector: 评分当前工作区" },
       { "command": "shitCodeDetector.scanFiles", "title": "Shit Code Detector: 选择文件评分" },
       { "command": "shitCodeDetector.scanRepository", "title": "Shit Code Detector: 评分 HTTPS Git 仓库" },
-      { "command": "shitCodeDetector.setApiKey", "title": "Shit Code Detector: 设置 AI API Key" }
+      { "command": "shitCodeDetector.setApiKey", "title": "Shit Code Detector: 设置 AI API Key" },
+      { "command": "shitCodeDetector.openAiConfig", "title": "Shit Code Detector: 打开本地 AI 配置" }
     ],
     "configuration": {
       "title": "Shit Code Detector",
       "properties": {
-        "shitCodeDetector.ai.enabled": { "type": "boolean", "default": false, "description": "启用 AI 分析。需要先通过命令安全保存 API Key。" },
+        "shitCodeDetector.ai.enabled": { "type": "boolean", "default": false, "description": "启用 AI 分析。API Key 可写入本地 ai.local.json，或通过命令保存到 SecretStorage。" },
         "shitCodeDetector.ai.baseUrl": { "type": "string", "default": "https://api.deepseek.com", "description": "OpenAI 兼容聊天 API 的 HTTPS 根地址。" },
         "shitCodeDetector.ai.model": { "type": "string", "default": "deepseek-v4-flash", "description": "AI 模型名称。" },
         "shitCodeDetector.ai.maxFiles": { "type": "integer", "default": 30, "minimum": 1, "maximum": 200, "description": "送入 AI 的最多文件数；本地规则仍扫描全部有效代码。" },
@@ -38,6 +51,8 @@
   "scripts": {
     "compile": "tsc -p .",
     "test": "npm run compile && node --test dist/test/*.test.js",
+    "test:ai": "npm run compile && node scripts/test-ai.js",
+    "fixtures": "npm run compile && node scripts/create-fixtures.js",
     "package": "npm run compile && node scripts/package.js"
   },
   "devDependencies": {

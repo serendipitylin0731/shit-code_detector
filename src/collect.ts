@@ -4,29 +4,18 @@ import os from 'node:os';
 import path from 'node:path';
 import * as vscode from 'vscode';
 import { CodeFile, languageOf } from './analysis';
-
-const ignoredDirectories = new Set([
-  '.git', '.hg', '.svn', 'node_modules', 'vendor', 'dist', 'build', 'out', 'target',
-  '.next', '.nuxt', '.venv', 'venv', '__pycache__', '.idea', '.vscode', 'coverage',
-  '.terraform', 'Pods', 'bin', 'obj'
-]);
-const ignoredFiles = /(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|composer\.lock|Gemfile\.lock|go\.sum|manifest\.toml)$|\.min\.(?:js|css)$|\.generated\.[^.]+$|\.g\.(?:cs|dart)$|\.pb\.(?:go|js|ts|py)$/i;
+import { ignoredDirectories, isEligible, isSensitiveConfig } from './fileFilter';
 
 export interface Collection {
   files: CodeFile[];
   skipped: { unsupported: number; large: number; binary: number; unreadable: number };
 }
 
-export function isEligible(relativePath: string): boolean {
-  const normalized = relativePath.replaceAll('\\', '/');
-  return Boolean(languageOf(normalized)) && !normalized.split('/').some(part => ignoredDirectories.has(part)) && !ignoredFiles.test(normalized);
-}
-
 export async function collectUris(entries: { uri: vscode.Uri; path: string }[], maxFileBytes: number, token?: vscode.CancellationToken, explicitSelection = false): Promise<Collection> {
   const collection: Collection = { files: [], skipped: { unsupported: 0, large: 0, binary: 0, unreadable: 0 } };
   for (const entry of entries) {
     if (token?.isCancellationRequested) throw new vscode.CancellationError();
-    if (!(explicitSelection ? Boolean(languageOf(entry.path)) : isEligible(entry.path))) { collection.skipped.unsupported++; continue; }
+    if (isSensitiveConfig(entry.path) || !(explicitSelection ? Boolean(languageOf(entry.path)) : isEligible(entry.path))) { collection.skipped.unsupported++; continue; }
     try {
       const stat = await vscode.workspace.fs.stat(entry.uri);
       if (stat.size > maxFileBytes) { collection.skipped.large++; continue; }
@@ -42,13 +31,14 @@ export async function collectUris(entries: { uri: vscode.Uri; path: string }[], 
   return collection;
 }
 
-export async function workspaceEntries(token?: vscode.CancellationToken): Promise<{ uri: vscode.Uri; path: string }[]> {
+export async function workspaceEntries(token?: vscode.CancellationToken, selectedFolder?: vscode.WorkspaceFolder): Promise<{ uri: vscode.Uri; path: string }[]> {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders?.length) throw new Error('请先打开一个工作区。');
-  const uris = await vscode.workspace.findFiles('**/*', '**/{.git,.hg,.svn,node_modules,vendor,dist,build,out,target,.next,.nuxt,.venv,venv,__pycache__,.idea,.vscode,coverage,.terraform,Pods,bin,obj}/**', undefined, token);
+  const include = selectedFolder ? new vscode.RelativePattern(selectedFolder, '**/*') : '**/*';
+  const uris = await vscode.workspace.findFiles(include, '**/{.git,.hg,.svn,node_modules,vendor,dist,build,out,target,.next,.nuxt,.venv,venv,__pycache__,.idea,.vscode,coverage,.terraform,Pods,bin,obj,artifacts}/**', undefined, token);
   return uris.map(uri => {
     const folder = vscode.workspace.getWorkspaceFolder(uri)!;
-    const prefix = folders.length > 1 ? `${folder.name}/` : '';
+    const prefix = folders.length > 1 && !selectedFolder ? `${folder.name}/` : '';
     return { uri, path: prefix + path.posix.relative(folder.uri.path, uri.path) };
   });
 }

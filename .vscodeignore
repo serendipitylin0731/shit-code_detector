@@ -8,3 +8,4 @@ tsconfig.json
 node_modules/**
 artifacts/**
 scripts/**
+ai.local.json
