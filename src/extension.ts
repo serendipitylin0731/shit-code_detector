@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import path from 'node:path';
-import { writeFile } from 'node:fs/promises';
 import { CodeFile, Finding, mergeAnalysis } from './analysis';
 import { analyzeInWorker } from './analyzeAsync';
 import { AiResult, analyzeWithAi } from './ai';
@@ -9,7 +8,7 @@ import { finalScore, formattedFinalScore } from './scoreTransform';
 import { summaryMetrics } from './summaryMetrics';
 import { compareGitBaseline, GitBaseline } from './gitBaseline';
 import { applyScanConfigToSelections, cloneRepository, collectUris, directoryEntries, ScanEntry, validateRepositoryUrl, workspaceEntries } from './collect';
-import { LocalAiConfig, localConfigName, readLocalAiConfig } from './localConfig';
+import { ScanConfig, selectScanConfig } from './scanConfig';
 import { dashboardFindings, fileScores } from './dashboardData';
 import { DashboardResult, SidebarAction, SidebarProvider } from './sidebar';
 
@@ -23,11 +22,12 @@ export function activate(context: vscode.ExtensionContext): void {
   let latestFiles: CodeFile[] = [];
   let reportId = 0;
   let running = false;
+  let repositoryConfig: ScanConfig | undefined;
   const sidebar = new SidebarProvider(handleSidebarAction);
-  sidebar.setWorkspaces(vscode.workspace.workspaceFolders);
-  context.subscriptions.push(output, vscode.window.registerWebviewViewProvider(SidebarProvider.viewId, sidebar), vscode.workspace.onDidChangeWorkspaceFolders(() => sidebar.setWorkspaces(vscode.workspace.workspaceFolders)));
+  void context.secrets.get(secretKey).then(key => sidebar.setApiKeyConfigured(Boolean(key)), () => undefined);
+  context.subscriptions.push(output, vscode.window.registerWebviewViewProvider(SidebarProvider.viewId, sidebar));
 
-  async function run(scope: Scope, target?: { workspace?: string; url?: string }): Promise<void> {
+  async function run(scope: Scope, target?: { url?: string }): Promise<void> {
     if (running) { vscode.window.showInformationMessage('Shit Code Detector：当前评分尚未完成。'); return; }
     running = true;
     let cleanup: (() => Promise<void>) | undefined;
@@ -40,12 +40,10 @@ export function activate(context: vscode.ExtensionContext): void {
         let label: string;
         let selectedWorkspace: vscode.WorkspaceFolder | undefined;
         if (scope === 'workspace') {
-          const selected = target?.workspace ? vscode.workspace.workspaceFolders?.find(folder => folder.uri.toString() === target.workspace) : undefined;
-          if (target?.workspace && !selected) throw new Error('所选工作区已不存在，请重新选择。');
-          selectedWorkspace = selected;
-          entries = await workspaceEntries(token, selected);
-          const folders = vscode.workspace.workspaceFolders ?? [];
-          label = selected?.name ?? (folders.length > 1 ? `全部工作区（${folders.map(folder => folder.name).join('、')}）` : folders[0]?.name ?? '当前工作区');
+          selectedWorkspace = vscode.workspace.workspaceFolders?.[0];
+          if (!selectedWorkspace) throw new Error('请先打开一个工作区根目录。');
+          entries = await workspaceEntries(token, selectedWorkspace);
+          label = `根目录：${selectedWorkspace.name}`;
         } else if (scope === 'files') {
           const selected = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false, canSelectMany: true, openLabel: '选择要评分的代码文件' });
           if (!selected?.length) { sidebar.setBusy(false); return; }
@@ -66,7 +64,7 @@ export function activate(context: vscode.ExtensionContext): void {
           progress.report({ message: '克隆 Git 仓库' });
           const clone = await cloneRepository(url, token);
           cleanup = clone.cleanup;
-          entries = await directoryEntries(clone.directory, token);
+          entries = await directoryEntries(clone.directory, token, repositoryConfig);
           label = url;
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
@@ -84,36 +82,26 @@ export function activate(context: vscode.ExtensionContext): void {
         try { result = await analyzeInWorker(collection.files, projectMode, analysisController.signal); }
         catch (error) { if (token.isCancellationRequested) throw new vscode.CancellationError(); throw error; }
         finally { analysisSubscription.dispose(); }
-        const baselineRoot = selectedWorkspace?.uri.fsPath ?? (scope === 'workspace' && vscode.workspace.workspaceFolders?.length === 1 ? vscode.workspace.workspaceFolders[0].uri.fsPath : undefined);
+        const baselineRoot = selectedWorkspace?.uri.fsPath;
         const baseline = scope === 'workspace' && baselineRoot ? await compareGitBaseline(baselineRoot, result) : undefined;
         let ai: AiResult | undefined;
-        let localAi: LocalAiConfig = {};
-        let localConfigError: string | undefined;
-        try { localAi = await readLocalAiConfig((selectedWorkspace ?? vscode.workspace.workspaceFolders?.[0])?.uri.fsPath); }
-        catch (error) { localConfigError = `本地 AI 配置读取失败：${error instanceof Error ? error.message : String(error)}`; }
-        const aiEnabled = Boolean(localConfigError) || (localAi.enabled ?? config.get<boolean>('ai.enabled', false));
-        if (aiEnabled) {
-          const apiKey = localConfigError ? undefined : localAi.apiKey || await context.secrets.get(secretKey);
-          if (localConfigError) {
-            ai = { findings: [], assessments: [], reviewedFiles: 0, reviewedProject: false, truncatedFiles: 0, errors: [localConfigError] };
-          } else if (!apiKey) {
-            ai = { findings: [], assessments: [], reviewedFiles: 0, reviewedProject: false, truncatedFiles: 0, errors: [`AI 已启用，但没有 API Key。请填写工作区根目录 ${localConfigName} 的 apiKey，或使用“设置 AI API Key”命令。`] };
-          } else {
-            progress.report({ message: '请求 AI 审查' });
-            const controller = new AbortController();
-            const subscription = token.onCancellationRequested(() => controller.abort());
-            try {
-              ai = await analyzeWithAi(result, {
-                baseUrl: localAi.baseUrl || config.get<string>('ai.baseUrl', 'https://api.deepseek.com'),
-                model: localAi.model || config.get<string>('ai.model', 'deepseek-v4-flash'),
-                apiKey,
-                maxFiles: config.get<number>('ai.maxFiles', 30),
-                maxCharsPerFile: config.get<number>('ai.maxCharsPerFile', 12000),
-                changedPaths: baseline?.changedPaths
-              }, projectMode, controller.signal);
-            } finally { subscription.dispose(); }
-            result = mergeAnalysis(result, ai.findings);
-          }
+        const apiKey = await context.secrets.get(secretKey);
+        const aiEnabled = Boolean(apiKey);
+        if (apiKey) {
+          progress.report({ message: '请求 AI 审查' });
+          const controller = new AbortController();
+          const subscription = token.onCancellationRequested(() => controller.abort());
+          try {
+            ai = await analyzeWithAi(result, {
+              baseUrl: config.get<string>('ai.baseUrl', 'https://api.deepseek.com'),
+              model: config.get<string>('ai.model', 'deepseek-v4-flash'),
+              apiKey,
+              maxFiles: config.get<number>('ai.maxFiles', 30),
+              maxCharsPerFile: config.get<number>('ai.maxCharsPerFile', 12000),
+              changedPaths: baseline?.changedPaths
+            }, projectMode, controller.signal);
+          } finally { subscription.dispose(); }
+          result = mergeAnalysis(result, ai.findings);
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
         const metrics = summaryMetrics(result, ai?.assessments.filter(item => item.grade === 'U').length ?? 0);
@@ -161,16 +149,17 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
-  async function openAiConfig(): Promise<void> {
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri;
-    if (!root || root.scheme !== 'file') throw new Error('请先打开本地工作区，再编辑 ai.local.json。');
-    const configPath = path.join(root.fsPath, localConfigName);
-    try {
-      await vscode.workspace.fs.stat(vscode.Uri.file(configPath));
-    } catch {
-      await writeFile(configPath, JSON.stringify({ enabled: true, baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash', apiKey: 'YOUR_DEEPSEEK_API_KEY_HERE' }, null, 2) + '\n', { flag: 'wx' });
-    }
-    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(configPath));
+  async function importRepositoryConfig(): Promise<void> {
+    const chosen = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
+      openLabel: '导入 Git 评分规则', title: '选择 .shitcode 或 .shitcode_ignore' });
+    if (!chosen?.length) return;
+    const name = path.basename(chosen[0].fsPath);
+    if (name !== '.shitcode' && name !== '.shitcode_ignore') throw new Error('只能导入名为 .shitcode 或 .shitcode_ignore 的文件。');
+    const bytes = await vscode.workspace.fs.readFile(chosen[0]);
+    if (bytes.length > 1024 * 1024) throw new Error('评分规则文件不能超过 1 MiB。');
+    const contents = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    repositoryConfig = name === '.shitcode' ? selectScanConfig(contents) : selectScanConfig(undefined, contents);
+    sidebar.setRepositoryConfigName(name);
   }
 
   async function showReport(): Promise<void> {
@@ -192,10 +181,11 @@ export function activate(context: vscode.ExtensionContext): void {
   async function handleSidebarAction(message: SidebarAction): Promise<void> {
     try {
       switch (message.action) {
-        case 'scanWorkspace': await run('workspace', { workspace: message.workspace }); break;
+        case 'scanWorkspace': await run('workspace'); break;
         case 'scanFiles': await run('files'); break;
         case 'scanRepository': await run('repository', { url: message.url }); break;
-        case 'openAiConfig': await openAiConfig(); break;
+        case 'importRepositoryConfig': await importRepositoryConfig(); break;
+        case 'clearRepositoryConfig': repositoryConfig = undefined; sidebar.setRepositoryConfigName(undefined); break;
         case 'setApiKey': await vscode.commands.executeCommand('shitCodeDetector.setApiKey'); break;
         case 'openReport': await showReport(); break;
         case 'exportJson': await exportJson(); break;
@@ -217,27 +207,17 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('shitCodeDetector.scanWorkspace', async () => {
-      const folders = vscode.workspace.workspaceFolders;
-      if (!folders?.length) { await run('workspace'); return; }
-      if (folders.length === 1) { await run('workspace', { workspace: folders[0].uri.toString() }); return; }
-      const choices = [{ label: '全部工作区', uri: undefined }, ...folders.map(folder => ({ label: folder.name, uri: folder.uri.toString() }))];
-      const picked = await vscode.window.showQuickPick(choices, { placeHolder: '选择要评分的工作区' });
-      if (picked) await run('workspace', { workspace: picked.uri });
-    }),
+    vscode.commands.registerCommand('shitCodeDetector.scanWorkspace', () => run('workspace')),
     vscode.commands.registerCommand('shitCodeDetector.scanFiles', () => run('files')),
     vscode.commands.registerCommand('shitCodeDetector.scanRepository', () => run('repository')),
     vscode.commands.registerCommand('shitCodeDetector.exportJson', () => exportJson()),
-    vscode.commands.registerCommand('shitCodeDetector.openAiConfig', async () => {
-      try { await openAiConfig(); }
-      catch (error) { vscode.window.showErrorMessage(`Shit Code Detector：${error instanceof Error ? error.message : String(error)}`); }
-    }),
     vscode.commands.registerCommand('shitCodeDetector.setApiKey', async () => {
       const key = await vscode.window.showInputBox({ prompt: '输入 AI API Key（留空并确认可删除已保存的 Key）', password: true, ignoreFocusOut: true });
       if (key === undefined) return;
       if (key.trim()) await context.secrets.store(secretKey, key.trim());
       else await context.secrets.delete(secretKey);
-      vscode.window.showInformationMessage(key.trim() ? 'AI API Key 已保存到 VS Code SecretStorage。' : 'AI API Key 已删除。');
+      sidebar.setApiKeyConfigured(Boolean(key.trim()));
+      vscode.window.showInformationMessage(key.trim() ? 'AI API Key 已安全保存；下次评分将自动调用 AI。' : 'AI API Key 已删除；后续评分只运行本地规则。');
     })
   );
 }
@@ -253,7 +233,7 @@ function makeReport(label: string, scope: Scope, rawScore: number, categoryScore
   const lines = [
     '# Shit Code Detector 评分报告', '',
     `- 对象：${clean(label)}`,
-    `- 模式：${scope === 'workspace' ? '工作区' : scope === 'files' ? '选定文件' : 'HTTPS Git 仓库'}`,
+    `- 模式：${scope === 'workspace' ? '根目录' : scope === 'files' ? '选定文件' : 'HTTPS Git 仓库'}`,
     `- 最终分：**${formattedFinalScore(rawScore)} / 9**（越高越 shit）`,
     `- 问题密度：${metrics.issueDensity.toFixed(1)} / 千行有效代码（小项目按 200 行平滑）`,
     `- 高风险状态：${metrics.highRisk ? '发现静态确认的高风险正确性或安全问题' : '未发现静态确认的高风险问题'}`,

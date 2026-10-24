@@ -24,10 +24,11 @@ export interface DashboardResult {
 }
 
 export type SidebarAction =
-  | { action: 'scanWorkspace'; workspace?: string }
+  | { action: 'scanWorkspace' }
   | { action: 'scanFiles' }
   | { action: 'scanRepository'; url: string }
-  | { action: 'openAiConfig' }
+  | { action: 'importRepositoryConfig' }
+  | { action: 'clearRepositoryConfig' }
   | { action: 'setApiKey' }
   | { action: 'openFinding'; index: number }
   | { action: 'openReport' }
@@ -39,7 +40,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private result?: DashboardResult;
   private busy = false;
   private message = '';
-  private workspaces: { name: string; uri: string }[] = [];
+  private repositoryConfigName?: string;
+  private apiKeyConfigured = false;
 
   constructor(private readonly onAction: (action: SidebarAction) => Promise<void>) {}
 
@@ -54,10 +56,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     view.onDidDispose(() => { this.view = undefined; });
   }
 
-  setWorkspaces(folders: readonly vscode.WorkspaceFolder[] = []): void {
-    this.workspaces = folders.map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
-    this.sendState();
-  }
+  setRepositoryConfigName(name?: string): void { this.repositoryConfigName = name; this.sendState(); }
+  setApiKeyConfigured(value: boolean): void { this.apiKeyConfigured = value; this.sendState(); }
 
   setBusy(value: boolean, message = ''): void { this.busy = value; this.message = message; this.sendState(); }
   setError(message: string): void { this.busy = false; this.message = message; this.sendState(); }
@@ -69,7 +69,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   getFinding(index: number): DashboardFinding | undefined { return this.result?.findings[index]; }
 
   private sendState(): void {
-    void this.view?.webview.postMessage({ type: 'state', result: this.result, busy: this.busy, message: this.message, workspaces: this.workspaces });
+    void this.view?.webview.postMessage({ type: 'state', result: this.result, busy: this.busy, message: this.message,
+      repositoryConfigName: this.repositoryConfigName, apiKeyConfigured: this.apiKeyConfigured });
   }
 }
 
@@ -81,6 +82,7 @@ function html(webview: vscode.Webview): string {
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; padding: 0 12px 24px; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: 12px; }
   button, select, input { font: inherit; }
   button { cursor: pointer; }
@@ -101,6 +103,9 @@ function html(webview: vscode.Webview): string {
   .action:disabled { opacity: .55; cursor: default; }
   .row { display: flex; gap: 6px; }
   .row > * { flex: 1; min-width: 0; }
+  .target-switch { display: flex; gap: 4px; margin-bottom: 9px; }
+  .target-switch button { flex: 1; padding: 7px 4px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  .target-switch button[aria-pressed="true"] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   .status { margin: 8px 0; min-height: 16px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
   .chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0; }
   .chip { padding: 4px 6px; background: var(--vscode-editorWidget-background); border-radius: 4px; }
@@ -127,23 +132,35 @@ function html(webview: vscode.Webview): string {
   .pager button { padding: 4px 7px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 0; border-radius: 3px; }
 </style></head><body>
 <div class="score-panel"><div class="eyebrow">Shit score</div><div class="score-line"><div class="score" id="score">—</div><span>/ 9</span></div><div class="meta" id="summary">选择评分对象后开始</div><div class="risk" id="risk"></div></div>
-<section class="section"><h2>评分对象</h2><select class="field" id="workspace"><option value="">当前全部工作区</option></select><button class="action" id="scanWorkspace">评分所选工作区</button><button class="action secondary" id="scanFiles">选择文件评分…</button><div class="hint">工作区和选定文件使用根目录 .shitcode 或 .shitcode_ignore；前者优先，路径规则同 .gitignore。</div><input class="field" id="repoUrl" type="url" placeholder="https://github.com/owner/repo.git" aria-label="Git 仓库 HTTPS 地址"><button class="action secondary" id="scanRepository">评分 Git 仓库</button></section>
-<section class="section"><h2>AI 分析</h2><div class="row"><button class="action secondary" id="openAiConfig">打开本地配置</button><button class="action secondary" id="setApiKey">安全保存 Key</button></div><div class="hint">本地配置：工作区根目录 ai.local.json</div></section>
+<section class="section"><h2>评分对象</h2><div class="target-switch" role="group" aria-label="评分目标"><button id="targetRoot" type="button" aria-pressed="true">根目录</button><button id="targetRepository" type="button" aria-pressed="false">Git 仓库</button></div><div id="rootControls"><button class="action" id="scanWorkspace">评分当前根目录</button><button class="action secondary" id="scanFiles">选择文件评分…</button><div class="hint">根目录和选定文件使用 .shitcode 或 .shitcode_ignore；前者优先，路径规则同 .gitignore。</div></div><div id="repositoryControls" hidden><input class="field" id="repoUrl" type="url" placeholder="https://github.com/owner/repo.git" aria-label="Git 仓库 HTTPS 地址"><div class="row"><button class="action secondary" id="importRepositoryConfig">导入评分规则…</button><button class="action secondary" id="clearRepositoryConfig" hidden>清除规则</button></div><div class="hint" id="repositoryConfigStatus">未导入规则：扫描仓库中的有效代码。</div><button class="action" id="scanRepository">评分 Git 仓库</button></div></section>
+<section class="section"><h2>AI 分析</h2><button class="action secondary" id="setApiKey">安全保存或更换 Key</button><div class="hint" id="apiKeyStatus">未配置 Key：只运行本地规则。</div></section>
 <div class="status" id="status" role="status"></div>
 <section class="section" id="results" hidden><div class="chips" id="categories"></div><h2>问题最多的文件</h2><div id="fileRanking"></div><details id="aiDetails"><summary id="aiGradeTitle">AI 分项等级</summary><div class="hint">固定条目按 A–E、N/A、U 分级；权重与公式见评分文档。</div><div id="aiAssessmentList"></div></details><div class="list-head"><h2 id="findingTitle">具体问题</h2><div><button class="open" id="openReport">Markdown 报告</button> · <button class="open" id="exportJson">导出 JSON</button></div></div><select class="field" id="fileFilter" aria-label="筛选文件"><option value="all">全部文件</option></select><select class="field" id="categoryFilter" aria-label="筛选类别"><option value="all">全部类别</option><option value="architecture">架构</option><option value="style">风格</option><option value="naming">命名</option><option value="readability">可读性</option><option value="complexity">复杂度</option><option value="duplication">重复</option><option value="consistency">一致性</option><option value="correctness">正确性</option><option value="security">安全</option></select><div class="hint" id="coverage"></div><div id="findingList"></div><div class="pager"><button id="previous">上一页</button><span id="pageLabel"></span><button id="next">下一页</button></div></section>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const $ = id => document.getElementById(id);
   let current = null, page = 0, busy = false;
+  let targetMode = vscode.getState()?.targetMode === 'repository' ? 'repository' : 'root';
   const pageSize = 100;
   const categoryNames = { architecture: '架构', style: '风格', naming: '命名', readability: '可读性', complexity: '复杂度', duplication: '重复', consistency: '一致性', correctness: '正确性', security: '安全' };
   const severityNames = { low: '轻微', medium: '一般', high: '较重', critical: '严重' };
   const gradeSeverity = { A: '无问题', B: '轻微', C: '一般', D: '较重', E: '严重', 'N/A': '不适用', U: '未完成' };
   function send(action, extras) { vscode.postMessage(Object.assign({ action }, extras || {})); }
-  $('scanWorkspace').onclick = () => send('scanWorkspace', { workspace: $('workspace').value || undefined });
+  function renderTargetMode() {
+    $('rootControls').hidden = targetMode !== 'root';
+    $('repositoryControls').hidden = targetMode !== 'repository';
+    $('targetRoot').setAttribute('aria-pressed', String(targetMode === 'root'));
+    $('targetRepository').setAttribute('aria-pressed', String(targetMode === 'repository'));
+    vscode.setState({ targetMode });
+  }
+  $('targetRoot').onclick = () => { targetMode = 'root'; renderTargetMode(); };
+  $('targetRepository').onclick = () => { targetMode = 'repository'; renderTargetMode(); };
+  renderTargetMode();
+  $('scanWorkspace').onclick = () => send('scanWorkspace');
   $('scanFiles').onclick = () => send('scanFiles');
   $('scanRepository').onclick = () => send('scanRepository', { url: $('repoUrl').value.trim() });
-  $('openAiConfig').onclick = () => send('openAiConfig');
+  $('importRepositoryConfig').onclick = () => send('importRepositoryConfig');
+  $('clearRepositoryConfig').onclick = () => send('clearRepositoryConfig');
   $('setApiKey').onclick = () => send('setApiKey');
   $('openReport').onclick = () => send('openReport');
   $('exportJson').onclick = () => send('exportJson');
@@ -178,13 +195,11 @@ function html(webview: vscode.Webview): string {
     if (event.data?.type !== 'state') return;
     const state = event.data;
     busy = Boolean(state.busy);
-    for (const id of ['scanWorkspace','scanFiles','scanRepository']) $(id).disabled = busy;
+    for (const id of ['scanWorkspace','scanFiles','scanRepository','importRepositoryConfig','clearRepositoryConfig']) $(id).disabled = busy;
     $('status').textContent = state.message || '';
-    const selected = $('workspace').value;
-    $('workspace').replaceChildren(make('option', '', '当前全部工作区'));
-    $('workspace').firstChild.value = '';
-    for (const folder of state.workspaces || []) { const option = make('option', '', folder.name); option.value = folder.uri; $('workspace').append(option); }
-    $('workspace').value = selected;
+    $('repositoryConfigStatus').textContent = state.repositoryConfigName ? '已导入 ' + state.repositoryConfigName + '，按其规则筛选仓库文件。' : '未导入规则：扫描仓库中的有效代码。';
+    $('clearRepositoryConfig').hidden = !state.repositoryConfigName;
+    $('apiKeyStatus').textContent = state.apiKeyConfigured ? 'Key 已安全保存；每次评分自动进行 AI 审查。' : '未配置 Key：只运行本地规则。';
     if (state.result) {
       const changed = current?.id !== state.result.id;
       current = state.result;

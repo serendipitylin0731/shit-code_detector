@@ -2,7 +2,7 @@
   "name": "shit-code-detector",
   "displayName": "Shit Code Detector",
   "description": "对多语言代码库进行可解释的 0–9 分质量分析",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "publisher": "serendipitylin0731",
   "author": "_serendipity",
   "license": "MIT",
@@ -24,7 +24,6 @@
     "onCommand:shitCodeDetector.scanFiles",
     "onCommand:shitCodeDetector.scanRepository",
     "onCommand:shitCodeDetector.setApiKey",
-    "onCommand:shitCodeDetector.openAiConfig",
     "onCommand:shitCodeDetector.exportJson"
   ],
   "contributes": {
@@ -49,7 +48,7 @@
     "commands": [
       {
         "command": "shitCodeDetector.scanWorkspace",
-        "title": "Shit Code Detector: 评分当前工作区"
+        "title": "Shit Code Detector: 评分当前根目录"
       },
       {
         "command": "shitCodeDetector.scanFiles",
@@ -64,10 +63,6 @@
         "title": "Shit Code Detector: 设置 AI API Key"
       },
       {
-        "command": "shitCodeDetector.openAiConfig",
-        "title": "Shit Code Detector: 打开本地 AI 配置"
-      },
-      {
         "command": "shitCodeDetector.exportJson",
         "title": "Shit Code Detector: 导出 JSON 报告"
       }
@@ -75,11 +70,6 @@
     "configuration": {
       "title": "Shit Code Detector",
       "properties": {
-        "shitCodeDetector.ai.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "启用 AI 分析。API Key 可写入本地 ai.local.json，或通过命令保存到 SecretStorage。"
-        },
         "shitCodeDetector.ai.baseUrl": {
           "type": "string",
           "default": "https://api.deepseek.com",

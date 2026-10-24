@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Finding } from '../src/analysis';
 import { dashboardFindings } from '../src/dashboardData';
-import { parseLocalAiConfig } from '../src/localConfig';
 
 test('侧边栏按内部权重排序，只暴露每条问题的严重程度', () => {
   const values = [1, 2, 4, 6];
@@ -24,9 +23,4 @@ test('AI 问题的颜色依据 A–E 等级，而非加权后的内部点数', (
   ];
   const rows = dashboardFindings(findings, []);
   assert.deepEqual(rows.map(item => item.severity), ['critical', 'low']);
-});
-
-test('本地 AI 配置将占位符视为未填写', () => {
-  assert.deepEqual(parseLocalAiConfig('{"enabled":true,"apiKey":"YOUR_DEEPSEEK_API_KEY_HERE"}'), { enabled: true, apiKey: undefined });
-  assert.throws(() => parseLocalAiConfig('{"enabled":"yes"}'), /enabled/);
 });

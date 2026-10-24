@@ -1,23 +1,25 @@
+const { readFile } = require('node:fs/promises');
 const path = require('node:path');
 const { analyze, mergeAnalysis } = require('../dist/src/analysis.js');
 const { analyzeWithAi } = require('../dist/src/ai.js');
 const { formattedFinalScore } = require('../dist/src/scoreTransform.js');
-const { readLocalAiConfig } = require('../dist/src/localConfig.js');
 const { qualityCases } = require('../dist/test/fixtures/quality.js');
 
 async function main() {
-  const config = await readLocalAiConfig(path.resolve(__dirname, '..'));
-  if (!config.enabled || !config.apiKey) {
-    throw new Error('请先在仓库根目录 ai.local.json 中填写 apiKey，并设置 enabled 为 true。');
-  }
+  let local = {};
+  try { local = JSON.parse(await readFile(path.resolve(__dirname, '..', 'ai.local.json'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw new Error('开发测试配置 ai.local.json 读取或解析失败。'); }
+  const localKey = typeof local.apiKey === 'string' && local.apiKey !== 'YOUR_DEEPSEEK_API_KEY_HERE' ? local.apiKey.trim() : '';
+  const apiKey = process.env.DEEPSEEK_API_KEY?.trim() || localKey;
+  if (!apiKey) throw new Error('请设置 DEEPSEEK_API_KEY，或填写本仓库开发测试用的 ai.local.json。');
   const selected = process.argv[2] ? qualityCases.filter(item => item.name === process.argv[2]) : qualityCases;
   if (!selected.length) throw new Error('样本名称只能是 good、medium 或 bad。');
   for (const item of selected) {
     const local = analyze(item.files);
     const ai = await analyzeWithAi(local, {
-      baseUrl: config.baseUrl || 'https://api.deepseek.com',
-      model: config.model || 'deepseek-v4-flash',
-      apiKey: config.apiKey,
+      baseUrl: process.env.DEEPSEEK_BASE_URL || local.baseUrl || 'https://api.deepseek.com',
+      model: process.env.DEEPSEEK_MODEL || local.model || 'deepseek-v4-flash',
+      apiKey,
       maxFiles: 30,
       maxCharsPerFile: 12000
     });

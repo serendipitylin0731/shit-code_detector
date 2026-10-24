@@ -83,9 +83,9 @@ export async function applyScanConfigToSelections(entries: ScanEntry[]): Promise
   return result;
 }
 
-export async function directoryEntries(root: string, token?: vscode.CancellationToken): Promise<{ uri: vscode.Uri; path: string }[]> {
-  const relatives = await listCodePaths(root, () => { if (token?.isCancellationRequested) throw new vscode.CancellationError(); });
-  return relatives.map(relative => ({ uri: vscode.Uri.file(path.join(root, relative)), path: relative }));
+export async function directoryEntries(root: string, token?: vscode.CancellationToken, config?: ScanConfig): Promise<ScanEntry[]> {
+  const relatives = await listCodePaths(root, () => { if (token?.isCancellationRequested) throw new vscode.CancellationError(); }, config);
+  return relatives.map(relative => ({ uri: vscode.Uri.file(path.join(root, relative)), path: relative, configured: config?.mode !== undefined && config.mode !== 'all' }));
 }
 
 export async function readRootScanConfig(root: vscode.Uri): Promise<ScanConfig> {

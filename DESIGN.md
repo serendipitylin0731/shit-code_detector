@@ -7,11 +7,10 @@
 ## 组件
 
 - `src/extension.ts`：注册命令、进度和取消操作、读取设置与 SecretStorage、生成报告。
-- `src/sidebar.ts` 与 `src/dashboardData.ts`：活动栏 Webview、三种目标选择、分数展示、严重程度着色与问题分页。
-- `src/localConfig.ts`：读取工作区根目录的 `ai.local.json`，校验本地 AI 设置。
+- `src/sidebar.ts` 与 `src/dashboardData.ts`：活动栏 Webview、根目录与 Git 仓库切换、选文件入口、分数展示、严重程度着色与问题分页。
 - `src/collect.ts`：工作区、显式文件和临时 Git 克隆的代码收集；工作区通过文件系统遍历，避免旧的 `.gitignore` 或编辑器搜索设置干预评分选择。
 - `src/scanConfig.ts`：根目录 `.shitcode` 允许列表和 `.shitcode_ignore` 排除列表；优先使用前者，模式语法与 `.gitignore` 一致。
-- `src/fileWalk.ts`：Git 仓库快照的有效代码遍历，不读取 `.gitignore` 作为评分排除依据。
+- `src/fileWalk.ts`：Git 仓库快照的有效代码遍历，支持用户导入的评分规则；不读取 `.gitignore` 作为评分排除依据。
 - `src/analysis.ts`：语言识别、通用规则、跨文件一致性与项目级架构规则。
 - `src/analyzeAsync.ts` 与 `src/analysisWorker.ts`：在工作线程执行本地分析，转发结果并响应取消。
 - `src/tsChecks.ts`、`src/python_check.py`、`src/generalChecks.ts`：按语言解析语法、运算符、注释、宏和高置信度运行异常；不执行被评分代码。
@@ -23,11 +22,11 @@
 - `src/summaryMetrics.ts`：问题密度、独立高风险状态和语言覆盖。
 - `src/gitBaseline.ts`：对工作区变更文件与 Git HEAD 做本地规则差异比较。
 
-流程：在左侧侧边栏选择目标 → 收集代码 → 本地评分及可用的 Git 基线比较 → 可选 AI 固定条目分级 → 按类别聚合并转换最终分 → 在侧边栏展示最终分、高风险状态、问题密度、分项等级和逐条严重程度。用户可从界面打开完整 Markdown 报告。Git 克隆目录在操作结束时清理。
+流程：在左侧侧边栏切换根目录或 Git 仓库目标 → 收集代码 → 本地评分及可用的 Git 基线比较 → 已安全保存 Key 时自动进行 AI 固定条目分级 → 按类别聚合并转换最终分 → 在侧边栏展示最终分、高风险状态、问题密度、分项等级和逐条严重程度。用户可从界面打开完整 Markdown 报告。Git 克隆目录在操作结束时清理。
 
 ## 有效代码与覆盖
 
-按扩展名或特殊文件名识别语言；二进制、超过 `maxFileBytes` 的文件与 `ai.local.json` 始终跳过。工作区和选定文件模式按根目录配置决定参与范围：`.shitcode` 只收录命中的文件，`.shitcode_ignore` 收录未命中的文件；两者均可用 Git ignore 格式的通配符与否定规则。配置启用时，内置的依赖/生成目录过滤不再替用户决定参与范围；未配置时仍使用内置有效代码过滤。支持多根工作区单选或全选，每个根目录单独解析。`.gitignore` 不参与评分选择。远端仓库只接受无凭据、无查询参数的 HTTPS URL，浅克隆且不递归子模块；仓库模式保持内置有效代码过滤，但也不读取 `.gitignore`。
+按扩展名或特殊文件名识别语言；二进制、超过 `maxFileBytes` 的文件与旧版 `ai.local.json` 始终跳过。根目录和选定文件模式按根目录配置决定参与范围：`.shitcode` 只收录命中的文件，`.shitcode_ignore` 收录未命中的文件；两者均可用 Git ignore 格式的通配符与否定规则。配置启用时，内置的依赖/生成目录过滤不再替用户决定参与范围；未配置时仍使用内置有效代码过滤。多根工作区的根目录入口固定使用第一个根目录，选定文件按各自所属根目录解析。`.gitignore` 不参与评分选择。远端仓库只接受无凭据、无查询参数的 HTTPS URL，浅克隆且不递归子模块；用户可导入一份本地评分规则筛选克隆后的文件，未导入时使用内置有效代码过滤。
 
 本地规则逐个分析所有收集到的代码文件。AI 只看有限样本，避免未经控制的费用和请求大小；大项目的架构判断应按报告所列证据范围理解。仓库内容是不可信输入，AI prompt 明确要求忽略其中的指令。
 

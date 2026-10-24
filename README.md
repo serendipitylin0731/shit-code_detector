@@ -9,13 +9,13 @@ Shit Code Detector 是一个 VS Code 插件。它先累计内部问题分，再�
 ## 功能
 
 - **左侧活动栏界面**：顶部显示 0–9 最终分，显示问题最多的文件和各类问题数量；每条问题只显示严重程度、类别、位置和理由，不显示单条加分。支持按文件与类别筛选、翻页和跳转。
-- **评分工作区**：可选择一个工作区或全部工作区；多根工作区保留根目录名称。
+- **评分根目录**：直接扫描当前工作区的根目录；多根工作区使用第一个根目录，参与文件由该目录的规则文件决定。
 - **选择文件评分**：从文件对话框选择一个或多个代码文件，只评估文件本身。
-- **评分 HTTPS Git 仓库**：浅克隆到临时目录，扫描后删除临时目录；不执行仓库代码。
+- **评分 HTTPS Git 仓库**：切换到 Git 仓库页后输入地址，可导入一份本地 `.shitcode` 或 `.shitcode_ignore` 筛选仓库文件；浅克隆到临时目录，扫描后删除，不执行仓库代码。
 - **本地静态分析**：检查运算符空格、注释格式、圈复杂度、认知复杂度、控制流嵌套、不可达代码、重复代码、循环依赖、异常处理、C/C++ 宏风险，以及 Python/JS/TS 的可确定语法与运行异常。格式分设聚合上限；文件长度、目录文件数和 `tmp` 等名称不单独判定代码质量。
 - **大项目可响应**：本地解析与评分在工作线程运行，可取消，不阻塞 VS Code 扩展主线程。
 - **根目录评分配置**：工作区和选定文件使用 `.shitcode` 允许列表或 `.shitcode_ignore` 排除列表；两者同时存在时只读取 `.shitcode`。路径写法、通配符、注释和 `!` 否定规则与 `.gitignore` 一致。`.gitignore` 本身不再决定文件是否参与评分。
-- **可选 AI 审查**：预先固定 11 个文件条目和 6 个项目条目，覆盖逻辑、边界、资源、性能、架构与安全。每项给 A–E、N/A 或 U；A 为零分，B–E 按基础分乘固定权重，U 表示未完成。可在本地 `ai.local.json` 填写 Key，或通过 VS Code SecretStorage 保存；报告列出每项等级、证据与覆盖数。完整标准见 [AI_RUBRIC.md](AI_RUBRIC.md)。
+- **可选 AI 审查**：预先固定 11 个文件条目和 6 个项目条目，覆盖逻辑、边界、资源、性能、架构与安全。每项给 A–E、N/A 或 U；A 为零分，B–E 按基础分乘固定权重，U 表示未完成。Key 保存在 VS Code SecretStorage，保存后每次评分自动调用 AI；报告列出每项等级、证据与覆盖数。完整标准见 [AI_RUBRIC.md](AI_RUBRIC.md)。
 - **逐项可追溯**：Markdown 报告列出分类、文件问题数及所有问题的严重程度；可导出不含完整源文件与 API 配置的 JSON 报告。问题说明可能引用短代码片段。
 
 识别 Python、JavaScript、TypeScript、Go、Rust、Java、Kotlin、C/C++、C#、PHP、Ruby、Swift、Scala、Dart、Shell、SQL、HTML/CSS、Vue、Svelte、JSON、YAML、Terraform 等常用语言与配置代码。完整扩展名表见 `src/analysis.ts`。二进制、生成文件、依赖目录和超出大小限制的文件会跳过，并在报告中计数。
@@ -29,9 +29,9 @@ npm install
 npm run compile
 ```
 
-在 VS Code 中打开本目录，按 **F5** 启动扩展开发宿主。点击左侧活动栏的 **Shit Code Detector** 图标，在界面中选择工作区、文件或 Git 仓库并评分。也可以使用命令面板：
+在 VS Code 中打开本目录，按 **F5** 启动扩展开发宿主。点击左侧活动栏的 **Shit Code Detector** 图标，在“根目录／Git 仓库”之间切换；根目录页还可选择文件评分。也可以使用命令面板：
 
-1. `Shit Code Detector: 评分当前工作区`
+1. `Shit Code Detector: 评分当前根目录`
 2. `Shit Code Detector: 选择文件评分`
 3. `Shit Code Detector: 评分 HTTPS Git 仓库`
 4. `Shit Code Detector: 导出 JSON 报告`
@@ -40,7 +40,7 @@ npm run compile
 
 ## 选择参与评分的文件
 
-在**每个工作区根目录**放置以下文件之一；多根工作区各自读取自己的配置。选定文件模式先取用户选择的文件，再应用所属根目录的配置。两个配置文件同时存在时，`.shitcode` 优先，即使它是空文件也不会回退到 `.shitcode_ignore`。
+在**当前工作区根目录**放置以下文件之一；多根工作区默认评分第一个根目录。选定文件模式先取用户选择的文件，再应用所属根目录的配置。两个配置文件同时存在时，`.shitcode` 优先，即使它是空文件也不会回退到 `.shitcode_ignore`。
 
 - `.shitcode`：允许列表，只有命中的有效代码文件参与评分。
 - `.shitcode_ignore`：排除列表，所有有效代码文件中只有命中的文件不参与评分。本仓库根目录已提供 [`.shitcode_ignore`](.shitcode_ignore)，可直接编辑。
@@ -62,26 +62,15 @@ dist/
 !src/keep.generated.ts
 ```
 
-每行的相对路径以对应工作区根目录为基准；空行、`#` 注释、`*`／`**` 通配符、目录末尾的 `/` 和 `!` 否定规则均沿用 `.gitignore` 语法。没有这两个文件时，工作区沿用内置的有效代码过滤。被配置选中的文件仍需是支持的代码类型、不是二进制且不超过读取大小限制；本地 `ai.local.json` 始终排除。HTTPS Git 仓库模式仍按有效代码规则扫描快照，不读取这两个配置文件。**`.gitignore` 只用于 Git 版本管理，不影响任何评分模式的文件选择。**
+每行的相对路径以对应根目录为基准；空行、`#` 注释、`*`／`**` 通配符、目录末尾的 `/` 和 `!` 否定规则均沿用 `.gitignore` 语法。没有这两个文件时，根目录沿用内置的有效代码过滤。被配置选中的文件仍需是支持的代码类型、不是二进制且不超过读取大小限制；旧版 `ai.local.json` 始终排除。Git 仓库页可从本机导入**一份**同名规则文件，规则相对于克隆仓库根目录生效；未导入时使用内置有效代码过滤。导入仅在本次扩展会话中保留，可在界面清除。**`.gitignore` 只用于 Git 版本管理，不影响任何评分模式的文件选择。**
 
 ## AI 设置
 
-当前工作区根目录已放置 **`ai.local.json`**，请把 `apiKey` 的占位符改成你的 DeepSeek Key。该文件已加入 `.gitignore`，不会提交到仓库；[示例模板](ai.local.example.json) 保留在版本库。界面中的“打开本地配置”按钮可直接打开它。
+点击侧边栏“安全保存或更换 Key”，输入 DeepSeek API Key。插件只将它存入 VS Code SecretStorage；不会在工作区创建配置 JSON。保存后下一次评分自动调用 AI，无需再开启开关。留空并确认可删除已保存的 Key。API 地址和模型可在 VS Code 设置中调整 `shitCodeDetector.ai.baseUrl` 与 `shitCodeDetector.ai.model`。
 
-```json
-{
-  "enabled": true,
-  "baseUrl": "https://api.deepseek.com",
-  "model": "deepseek-v4-flash",
-  "apiKey": "YOUR_DEEPSEEK_API_KEY_HERE"
-}
-```
+开发者可用环境变量 `DEEPSEEK_API_KEY` 运行 `npm run test:ai`，也可继续使用本仓库已有的、被 Git 忽略的 `ai.local.json` 作为测试脚本的 Key 来源；环境变量优先，可选设置 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL`。该文件只供开发测试脚本读取，插件不会读取或创建它。这是显式调用真实 API 的测试，会产生 API 请求；普通 `npm test` 不调用网络 AI。
 
-也可以运行 `Shit Code Detector: 设置 AI API Key`，将 Key 存入 VS Code SecretStorage，并在设置中开启 `shitCodeDetector.ai.enabled`。存在本地配置时，它的 `enabled`、`baseUrl`、`model` 和已填写的 `apiKey` 优先；缺失字段沿用 VS Code 设置或 SecretStorage。
-
-填写本地文件后可运行 `npm run test:ai`，让 AI 分别审查好、中、差三个样本并打印 0–9 最终分与有效等级。这是显式调用真实 API 的测试，会产生 API 请求；普通 `npm test` 不会调用网络 AI。
-
-启用后，代码片段会发送到配置的 HTTPS API。默认最多抽取 30 个文件，每个文件最多 12,000 字符；本地规则仍扫描所有可读取的有效代码。`ai.local.json` 本身始终排除在代码扫描之外。AI 未配置或请求失败时，报告保留本地分数并说明原因。不同模型和抽样范围可能得到不同的 AI 分数。
+评分时，代码片段会发送到配置的 HTTPS API。默认最多抽取 30 个文件，每个文件最多 12,000 字符；本地规则仍扫描所有可读取的有效代码。旧版 `ai.local.json` 不再用于插件配置，也不会作为代码扫描。没有保存 Key 或请求失败时，报告保留本地分数并说明原因。不同模型和抽样范围可能得到不同的 AI 分数。
 
 ## 评分与限制
 
@@ -92,7 +81,7 @@ npm test
 npm run fixtures
 ```
 
-`npm run fixtures` 会在 `artifacts/` 中生成三档实体项目及 `quality-fixtures.code-workspace`。在 VS Code 打开该工作区文件后，可从插件侧边栏分别选择 good、medium、bad 进行人工验证。
+`npm run fixtures` 会在 `artifacts/quality-fixtures/` 中生成 good、medium、bad 三档实体项目。分别将这三个目录作为 VS Code 根目录打开，即可人工验证评分梯度。
 
 ## 版本维护
 

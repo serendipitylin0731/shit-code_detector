@@ -11,8 +11,5 @@ for (const item of qualityCases) {
     fs.writeFileSync(target, file.content + '\n');
   }
 }
-const workspace = {
-  folders: qualityCases.map(item => ({ name: item.name, path: `quality-fixtures/${item.name}` }))
-};
-fs.writeFileSync(path.join(root, 'artifacts', 'quality-fixtures.code-workspace'), JSON.stringify(workspace, null, 2) + '\n');
-console.log(`已生成 ${output} 和多根工作区文件。`);
+fs.rmSync(path.join(root, 'artifacts', 'quality-fixtures.code-workspace'), { force: true });
+console.log(`已生成 ${output}；请分别打开 good、medium、bad 根目录评分。`);
