@@ -76,6 +76,22 @@ export function inspectTypeScript(file: CodeFile): Finding[] {
       const first = lineAt(node.getStart(source));
       const length = lineAt(node.end) - first + 1;
       if (length > 120) add(first, 'readability', 'long-function', Math.ceil((length - 120) / 60) * 2, `函数长 ${length} 行，建议按职责拆分`);
+      const name = functionName(node);
+      const parameters = (node as Ts.FunctionLikeDeclaration).parameters?.length ?? 0;
+      if (parameters > 6) add(first, 'readability', 'many-parameters', Math.ceil((parameters - 6) / 2) * 2, `函数“${name}”有 ${parameters} 个参数，调用方难以理解参数含义`);
+      const body = (node as Ts.FunctionLikeDeclaration).body;
+      if (body) {
+        const { complexity, nesting } = functionComplexity(body);
+        if (complexity > 10) add(first, 'complexity', 'cyclomatic-complexity', Math.ceil((complexity - 10) / 3) * 2, `函数“${name}”圈复杂度 ${complexity}，超过阈值 10`);
+        if (nesting > 4) add(first, 'complexity', 'control-nesting', (nesting - 4) * 2, `函数“${name}”控制流嵌套 ${nesting} 层，超过阈值 4`);
+      }
+    }
+    if (ts.isCatchClause(node)) {
+      const statements = node.block.statements;
+      if (!statements.length) add(lineAt(node.getStart(source)), 'correctness', 'swallowed-error', 5, '空 catch 块吞掉异常，失败时没有可观察结果');
+      else if (statements.length === 1 && ts.isExpressionStatement(statements[0]) && isConsoleCall(statements[0].expression)) {
+        add(lineAt(node.getStart(source)), 'correctness', 'log-only-error', 3, 'catch 仅打印异常，调用方无法获知失败');
+      }
     }
     if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && isNullishLiteral(node.expression)) {
       add(lineAt(node.getStart(source)), 'correctness', 'null-dereference', 5, '直接访问 null/undefined 的成员会抛出 TypeError');
@@ -103,4 +119,32 @@ function isFunction(node: Ts.Node): boolean {
   return ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) ||
     ts.isMethodDeclaration(node) || ts.isConstructorDeclaration(node) ||
     ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node);
+}
+
+function functionName(node: Ts.Node): string {
+  if ('name' in node && node.name && typeof node.name === 'object' && 'getText' in node.name) return (node.name as Ts.Node).getText();
+  return '<匿名函数>';
+}
+
+function functionComplexity(body: Ts.Node): { complexity: number; nesting: number } {
+  let complexity = 1;
+  let nesting = 0;
+  function visit(node: Ts.Node, depth: number): void {
+    if (node !== body && isFunction(node)) return;
+    const branch = ts.isIfStatement(node) || ts.isForStatement(node) || ts.isForInStatement(node) ||
+      ts.isForOfStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node) ||
+      ts.isCatchClause(node) || ts.isConditionalExpression(node) || ts.isCaseClause(node);
+    if (branch) complexity++;
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(node.operatorToken.kind)) complexity++;
+    const next = branch ? depth + 1 : depth;
+    nesting = Math.max(nesting, next);
+    ts.forEachChild(node, child => visit(child, next));
+  }
+  visit(body, 0);
+  return { complexity, nesting };
+}
+
+function isConsoleCall(node: Ts.Node): boolean {
+  return ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'console';
 }

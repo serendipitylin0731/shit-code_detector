@@ -37,6 +37,40 @@ def inspect_file(item):
                 add(node.lineno, "readability", "long-function",
                     ((length - 121) // 60 + 1) * 2,
                     f"函数长 {length} 行，建议按职责拆分")
+            arguments = node.args
+            parameter_count = (len(arguments.posonlyargs) + len(arguments.args) +
+                               len(arguments.kwonlyargs) + int(arguments.vararg is not None) +
+                               int(arguments.kwarg is not None))
+            if arguments.args and arguments.args[0].arg in {"self", "cls"}:
+                parameter_count -= 1
+            if parameter_count > 6:
+                add(node.lineno, "readability", "many-parameters",
+                    ((parameter_count - 7) // 2 + 1) * 2,
+                    f"函数“{node.name}”有 {parameter_count} 个参数，调用方难以理解参数含义")
+            complexity, nesting = function_complexity(node)
+            if complexity > 10:
+                add(node.lineno, "complexity", "cyclomatic-complexity",
+                    ((complexity - 11) // 3 + 1) * 2,
+                    f"函数“{node.name}”圈复杂度 {complexity}，超过阈值 10")
+            if nesting > 4:
+                add(node.lineno, "complexity", "control-nesting", (nesting - 4) * 2,
+                    f"函数“{node.name}”控制流嵌套 {nesting} 层，超过阈值 4")
+        if isinstance(node, ast.ExceptHandler):
+            broad = node.type is None or (isinstance(node.type, ast.Name) and
+                    node.type.id in {"Exception", "BaseException"})
+            if len(node.body) == 1 and isinstance(node.body[0], (ast.Pass, ast.Expr)):
+                statement = node.body[0]
+                silent = isinstance(statement, ast.Pass) or (isinstance(statement, ast.Expr) and
+                         isinstance(statement.value, ast.Constant) and statement.value.value is Ellipsis)
+                if silent and broad and not is_test:
+                    add(node.lineno, "correctness", "swallowed-error", 5,
+                        "宽泛 except 块直接跳过异常，失败时没有可观察结果")
+                elif broad and not is_test:
+                    add(node.lineno, "correctness", "broad-except", 3,
+                        "异常处理捕获所有异常，包括可能需要中断运行的异常")
+            elif broad and not is_test:
+                add(node.lineno, "correctness", "broad-except", 3,
+                    "异常处理捕获所有异常，包括可能需要中断运行的异常")
         if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
             right = node.right
             if isinstance(right, ast.Constant) and isinstance(right.value, (int, float, complex)) and right.value == 0:
@@ -100,6 +134,38 @@ def inspect_file(item):
         add(first_compact_comment, "consistency", "comment-style", 2,
             "同一文件的普通注释混用了带空格和不带空格的标记格式")
     return findings
+
+
+def function_complexity(function):
+    """Count control-flow decisions without attributing nested functions to their parent."""
+    complexity = 1
+    maximum_nesting = 0
+    decisions = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.ExceptHandler, ast.IfExp)
+    nesting_kinds = decisions + (ast.Try, ast.With, ast.AsyncWith) + tuple(
+        kind for kind in (getattr(ast, "TryStar", None), getattr(ast, "Match", None))
+        if kind is not None)
+
+    def visit(node, depth):
+        nonlocal complexity, maximum_nesting
+        if node is not function and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                                      ast.Lambda, ast.ClassDef)):
+            return
+        if isinstance(node, decisions):
+            complexity += 1
+        if isinstance(node, getattr(ast, "Match", ())):
+            complexity += len(node.cases)
+        if isinstance(node, ast.BoolOp):
+            complexity += max(0, len(node.values) - 1)
+        if isinstance(node, ast.comprehension):
+            complexity += 1 + len(node.ifs)
+        next_depth = depth + int(isinstance(node, nesting_kinds))
+        maximum_nesting = max(maximum_nesting, next_depth)
+        for child in ast.iter_child_nodes(node):
+            visit(child, next_depth)
+
+    for statement in function.body:
+        visit(statement, 0)
+    return complexity, maximum_nesting
 
 
 def main():

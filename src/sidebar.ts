@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import { Analysis } from './analysis';
-import { DashboardFinding } from './dashboardData';
+import { DashboardFinding, FileScore } from './dashboardData';
 
 export interface DashboardResult {
   id: number;
@@ -13,6 +13,7 @@ export interface DashboardResult {
   checks: string;
   ai: string;
   categoryScores: Analysis['categoryScores'];
+  fileScores: FileScore[];
   findings: DashboardFinding[];
 }
 
@@ -23,7 +24,8 @@ export type SidebarAction =
   | { action: 'openAiConfig' }
   | { action: 'setApiKey' }
   | { action: 'openFinding'; index: number }
-  | { action: 'openReport' };
+  | { action: 'openReport' }
+  | { action: 'exportJson' };
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   static readonly viewId = 'shitCodeDetector.dashboard';
@@ -95,6 +97,10 @@ function html(webview: vscode.Webview): string {
   .status { margin: 8px 0; min-height: 16px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
   .chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0; }
   .chip { padding: 4px 6px; background: var(--vscode-editorWidget-background); border-radius: 4px; }
+  .rank { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; padding: 6px; border: 0; border-radius: 3px; color: var(--vscode-foreground); background: var(--vscode-editorWidget-background); text-align: left; }
+  .rank:hover { background: var(--vscode-list-hoverBackground); }
+  .rank span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank strong { color: #e4773e; font-variant-numeric: tabular-nums; }
   .list-head { display: flex; align-items: baseline; justify-content: space-between; }
   .finding { border-left: 3px solid; margin: 7px 0; padding: 8px 8px 9px; border-radius: 3px; background: var(--vscode-editorWidget-background); overflow-wrap: anywhere; }
   .finding.low { border-color: #4f9f70; } .finding.medium { border-color: #d6a338; }
@@ -114,13 +120,13 @@ function html(webview: vscode.Webview): string {
 <section class="section"><h2>评分对象</h2><select class="field" id="workspace"><option value="">当前全部工作区</option></select><button class="action" id="scanWorkspace">评分所选工作区</button><button class="action secondary" id="scanFiles">选择文件评分…</button><input class="field" id="repoUrl" type="url" placeholder="https://github.com/owner/repo.git" aria-label="Git 仓库 HTTPS 地址"><button class="action secondary" id="scanRepository">评分 Git 仓库</button></section>
 <section class="section"><h2>AI 分析</h2><div class="row"><button class="action secondary" id="openAiConfig">打开本地配置</button><button class="action secondary" id="setApiKey">安全保存 Key</button></div><div class="hint">本地配置：工作区根目录 ai.local.json</div></section>
 <div class="status" id="status" role="status"></div>
-<section class="section" id="results" hidden><div class="chips" id="categories"></div><div class="list-head"><h2 id="findingTitle">具体问题</h2><button class="open" id="openReport">打开完整报告</button></div><select class="field" id="categoryFilter" aria-label="筛选类别"><option value="all">全部类别</option><option value="architecture">架构</option><option value="style">风格</option><option value="naming">命名</option><option value="readability">可读性</option><option value="consistency">一致性</option><option value="correctness">正确性</option></select><div class="hint" id="coverage"></div><div id="findingList"></div><div class="pager"><button id="previous">上一页</button><span id="pageLabel"></span><button id="next">下一页</button></div></section>
+<section class="section" id="results" hidden><div class="chips" id="categories"></div><h2>问题最多的文件</h2><div id="fileRanking"></div><div class="list-head"><h2 id="findingTitle">具体问题</h2><div><button class="open" id="openReport">Markdown 报告</button> · <button class="open" id="exportJson">导出 JSON</button></div></div><select class="field" id="fileFilter" aria-label="筛选文件"><option value="all">全部文件</option></select><select class="field" id="categoryFilter" aria-label="筛选类别"><option value="all">全部类别</option><option value="architecture">架构</option><option value="style">风格</option><option value="naming">命名</option><option value="readability">可读性</option><option value="complexity">复杂度</option><option value="duplication">重复</option><option value="consistency">一致性</option><option value="correctness">正确性</option></select><div class="hint" id="coverage"></div><div id="findingList"></div><div class="pager"><button id="previous">上一页</button><span id="pageLabel"></span><button id="next">下一页</button></div></section>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const $ = id => document.getElementById(id);
   let current = null, page = 0, busy = false;
   const pageSize = 100;
-  const categoryNames = { architecture: '架构', style: '风格', naming: '命名', readability: '可读性', consistency: '一致性', correctness: '正确性' };
+  const categoryNames = { architecture: '架构', style: '风格', naming: '命名', readability: '可读性', complexity: '复杂度', duplication: '重复', consistency: '一致性', correctness: '正确性' };
   const severityNames = { low: '轻微', medium: '一般', high: '较重', critical: '严重' };
   function send(action, extras) { vscode.postMessage(Object.assign({ action }, extras || {})); }
   $('scanWorkspace').onclick = () => send('scanWorkspace', { workspace: $('workspace').value || undefined });
@@ -129,14 +135,17 @@ function html(webview: vscode.Webview): string {
   $('openAiConfig').onclick = () => send('openAiConfig');
   $('setApiKey').onclick = () => send('setApiKey');
   $('openReport').onclick = () => send('openReport');
+  $('exportJson').onclick = () => send('exportJson');
   $('categoryFilter').onchange = () => { page = 0; renderFindings(); };
+  $('fileFilter').onchange = () => { page = 0; renderFindings(); };
   $('previous').onclick = () => { if (page > 0) { page--; renderFindings(); } };
   $('next').onclick = () => { page++; renderFindings(); };
   function make(tag, className, content) { const node = document.createElement(tag); if (className) node.className = className; if (content !== undefined) node.textContent = String(content); return node; }
   function renderFindings() {
     if (!current) return;
     const filter = $('categoryFilter').value;
-    const items = current.findings.filter(item => filter === 'all' || item.category === filter);
+    const file = $('fileFilter').value;
+    const items = current.findings.filter(item => (filter === 'all' || item.category === filter) && (file === 'all' || item.path === file));
     const pages = Math.max(1, Math.ceil(items.length / pageSize));
     page = Math.min(page, pages - 1);
     $('findingTitle').textContent = '具体问题 · ' + items.length;
@@ -174,7 +183,22 @@ function html(webview: vscode.Webview): string {
       $('coverage').textContent = '跳过：' + current.skipped + ' · 解析：' + current.checks + ' · AI：' + current.ai;
       const chips = $('categories'); chips.replaceChildren();
       for (const [key, value] of Object.entries(current.categoryScores)) chips.append(make('span', 'chip', (categoryNames[key] || key) + ' ' + value));
-      if (changed) { page = 0; renderFindings(); }
+      if (changed) {
+        const fileSelect = $('fileFilter'); fileSelect.replaceChildren();
+        const all = make('option', '', '全部文件'); all.value = 'all'; fileSelect.append(all);
+        const ranking = $('fileRanking'); ranking.replaceChildren();
+        for (const entry of current.fileScores) {
+          const option = make('option', '', entry.path + ' · ' + entry.score); option.value = entry.path; fileSelect.append(option);
+        }
+        for (const entry of current.fileScores.filter(item => item.score > 0).slice(0, 10)) {
+          const button = make('button', 'rank'); button.title = entry.path + ' · ' + entry.findings + ' 条问题';
+          button.append(make('span', '', entry.path), make('strong', '', '+' + entry.score));
+          button.onclick = () => { fileSelect.value = entry.path; page = 0; renderFindings(); };
+          ranking.append(button);
+        }
+        if (!ranking.childNodes.length) ranking.append(make('p', 'hint', '没有发现可计分的文件问题。'));
+        page = 0; renderFindings();
+      }
     }
   });
   send('ready');

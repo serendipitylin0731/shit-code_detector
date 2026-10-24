@@ -2,20 +2,21 @@
 
 作者：**_serendipity**
 
-Shit Code Detector 是一个 VS Code 插件，用可解释的扣分项给代码库打“shit 分”：问题越多、影响越大，分数越高，**没有上限**。支持整个工作区、手动选择的文件，以及 HTTPS Git 仓库。默认在本地运行确定性规则；启用 AI 后，可用 DeepSeek 等兼容 Chat Completions 的 API 补充语义和架构审查。
+Shit Code Detector 是一个 VS Code 插件，用可解释的扣分项给代码库打“shit 分”：问题越多、影响越大，分数越高，**没有上限**。支持整个工作区、手动选择的文件，以及 HTTPS Git 仓库。默认在本地运行确定性规则；启用 AI 后，可用 DeepSeek 等兼容 Chat Completions 的 API 补充语义和架构审查。质量维度参考 [Done-0/fuck-u-code](https://github.com/Done-0/fuck-u-code)，但采用独立实现与无上限的逐项加分公式；对应关系见 [REFERENCE.md](REFERENCE.md)。
 
 评分回归使用仓库内可重复的好、中、差三档样本；真实项目补充验证使用 [psf/requests](https://github.com/psf/requests)。测试数据和结果见 [VALIDATION.md](VALIDATION.md)。
 
 ## 功能
 
-- **左侧活动栏界面**：顶部显示无上限总分，下方列出每条加分、类别、严重程度、文件位置和理由；颜色区分严重程度，支持筛选、翻页和跳转到文件。
+- **左侧活动栏界面**：顶部显示无上限总分，显示问题最多的文件及每个文件的分数；每条问题列出加分、类别、严重程度、位置和理由，支持按文件与类别筛选、翻页和跳转。
 - **评分工作区**：可选择一个工作区或全部工作区；多根工作区保留根目录名称。
 - **选择文件评分**：从文件对话框选择一个或多个代码文件，只评估文件本身。
 - **评分 HTTPS Git 仓库**：浅克隆到临时目录，扫描后删除临时目录；不执行仓库代码。
-- **更细的本地规则**：检查运算符空格、注释格式及一致性、函数长度、C/C++ 宏风险，以及 Python/JS/TS 可静态确定的语法与明显运行异常。
+- **更细的本地规则**：检查运算符空格、注释格式、函数长度、圈复杂度、控制流嵌套、参数数量、重复代码、循环依赖、异常处理、C/C++ 宏风险，以及 Python/JS/TS 可静态确定的语法与明显运行异常。
+- **大项目可响应**：本地解析与评分在工作线程运行，可取消，不阻塞 VS Code 扩展主线程。
 - **遵循 `.gitignore`**：工作区、选定文件和克隆仓库均按根目录与嵌套规则过滤，忽略文件不参与评分或 AI 审查。
 - **可选 AI 审查**：在本地 `ai.local.json` 填写 Key，或通过 VS Code SecretStorage 保存；报告会注明 AI 覆盖数、截断数和失败批次。
-- **逐项可追溯**：报告列出类别、规则来源、文件位置、说明和每项加分。
+- **逐项可追溯**：Markdown 报告列出分类、每个文件的分数及所有问题；可导出不含完整源文件与 API 配置的 JSON 报告。问题说明可能引用短代码片段。
 
 识别 Python、JavaScript、TypeScript、Go、Rust、Java、Kotlin、C/C++、C#、PHP、Ruby、Swift、Scala、Dart、Shell、SQL、HTML/CSS、Vue、Svelte、JSON、YAML、Terraform 等常用语言与配置代码。完整扩展名表见 `src/analysis.ts`。二进制、生成文件、依赖目录和超出大小限制的文件会跳过，并在报告中计数。
 
@@ -33,6 +34,7 @@ npm run compile
 1. `Shit Code Detector: 评分当前工作区`
 2. `Shit Code Detector: 选择文件评分`
 3. `Shit Code Detector: 评分 HTTPS Git 仓库`
+4. `Shit Code Detector: 导出 JSON 报告`
 
 安装包在 [GitHub Releases](https://github.com/serendipitylin0731/shit-code_detector/releases) 发布；下载对应版本的 `.vsix`，再用 VS Code 的“从 VSIX 安装”。`npm run package` 仅供本地构建验证，产物放在被 Git 忽略的 `artifacts/` 目录。推送 `v` 开头且与 `package.json` 版本一致的标签后，GitHub Actions 会测试、打包并创建 Release。
 

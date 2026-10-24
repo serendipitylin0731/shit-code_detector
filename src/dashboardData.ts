@@ -12,6 +12,17 @@ export interface DashboardFinding {
   openable: boolean;
 }
 
+export interface FileScore { path: string; score: number; findings: number }
+
+export function fileScores(findings: Finding[], files: CodeFile[]): FileScore[] {
+  const scores = new Map(files.map(file => [file.path, { path: file.path, score: 0, findings: 0 }]));
+  for (const finding of findings) {
+    const entry = scores.get(finding.path);
+    if (entry) { entry.score += finding.points; entry.findings++; }
+  }
+  return [...scores.values()].sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+}
+
 export function dashboardFindings(findings: Finding[], files: CodeFile[]): DashboardFinding[] {
   const available = new Set(files.filter(file => file.uri).map(file => file.path));
   return [...findings]

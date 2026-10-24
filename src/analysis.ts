@@ -2,8 +2,9 @@ import path from 'node:path';
 import { inspectGeneral } from './generalChecks';
 import { inspectPython } from './pythonChecks';
 import { inspectTypeScript } from './tsChecks';
+import { inspectDuplication, inspectImportCycles } from './projectChecks';
 
-export type Category = 'style' | 'naming' | 'readability' | 'consistency' | 'architecture' | 'correctness';
+export type Category = 'style' | 'naming' | 'readability' | 'complexity' | 'duplication' | 'consistency' | 'architecture' | 'correctness';
 
 export interface CodeFile {
   path: string;
@@ -130,6 +131,8 @@ export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = 
   const pythonFiles = files.filter(file => file.language === 'Python');
   const python = inspectPython(pythonFiles);
   findings.push(...python.findings);
+  findings.push(...inspectDuplication(files));
+  if (projectMode) findings.push(...inspectImportCycles(files));
   const checkCoverage = `JS/TS AST ${jsTsChecked} 个、Python AST ${python.checked}/${pythonFiles.length} 个、严格 JSON ${jsonChecked} 个${python.note ? `；${python.note}` : ''}`;
 
   return finalize(files, [...findings, ...extra], checkCoverage);
@@ -140,7 +143,7 @@ export function mergeAnalysis(base: Analysis, extra: Finding[]): Analysis {
 }
 
 function finalize(files: CodeFile[], merged: Finding[], checkCoverage: string): Analysis {
-  const categoryScores: Record<Category, number> = { style: 0, naming: 0, readability: 0, consistency: 0, architecture: 0, correctness: 0 };
+  const categoryScores: Record<Category, number> = { style: 0, naming: 0, readability: 0, complexity: 0, duplication: 0, consistency: 0, architecture: 0, correctness: 0 };
   for (const finding of merged) categoryScores[finding.category] += finding.points;
   return { files, findings: merged, score: merged.reduce((sum, finding) => sum + finding.points, 0), categoryScores, checkCoverage };
 }

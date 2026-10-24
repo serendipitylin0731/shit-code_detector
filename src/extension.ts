@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
 import path from 'node:path';
 import { writeFile } from 'node:fs/promises';
-import { analyze, CodeFile, Finding, mergeAnalysis } from './analysis';
+import { CodeFile, Finding, mergeAnalysis } from './analysis';
+import { analyzeInWorker } from './analyzeAsync';
 import { AiResult, analyzeWithAi } from './ai';
 import { cloneRepository, collectUris, directoryEntries, excludeIgnoredSelections, validateRepositoryUrl, workspaceEntries } from './collect';
 import { LocalAiConfig, localConfigName, readLocalAiConfig } from './localConfig';
-import { dashboardFindings } from './dashboardData';
+import { dashboardFindings, fileScores } from './dashboardData';
 import { DashboardResult, SidebarAction, SidebarProvider } from './sidebar';
 
 const secretKey = 'shitCodeDetector.ai.apiKey';
@@ -14,6 +15,7 @@ type Scope = 'workspace' | 'files' | 'repository';
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('Shit Code Detector');
   let latestReport: string | undefined;
+  let latestJson: string | undefined;
   let latestFiles: CodeFile[] = [];
   let reportId = 0;
   let running = false;
@@ -72,7 +74,12 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!collection.files.length) throw new Error('没有找到可评分的代码文件。请检查文件类型或排除规则。');
         progress.report({ message: `运行本地规则（${collection.files.length} 个文件）` });
         const projectMode = scope !== 'files';
-        let result = analyze(collection.files, [], projectMode);
+        const analysisController = new AbortController();
+        const analysisSubscription = token.onCancellationRequested(() => analysisController.abort());
+        let result;
+        try { result = await analyzeInWorker(collection.files, projectMode, analysisController.signal); }
+        catch (error) { if (token.isCancellationRequested) throw new vscode.CancellationError(); throw error; }
+        finally { analysisSubscription.dispose(); }
         let ai: AiResult | undefined;
         let localAi: LocalAiConfig = {};
         let localConfigError: string | undefined;
@@ -104,6 +111,11 @@ export function activate(context: vscode.ExtensionContext): void {
         if (token.isCancellationRequested) throw new vscode.CancellationError();
         const report = makeReport(label, scope, result.score, result.categoryScores, result.findings, collection.files, collection.skipped, result.checkCoverage, aiEnabled, ai);
         latestReport = report;
+        latestJson = JSON.stringify({ schemaVersion: 1, target: label, scope, score: result.score,
+          fileCount: collection.files.length, categoryScores: result.categoryScores,
+          checkCoverage: result.checkCoverage, fileScores: fileScores(result.findings, collection.files),
+          findings: result.findings, skipped: collection.skipped,
+          ai: { enabled: aiEnabled, reviewedFiles: ai?.reviewedFiles ?? 0, truncatedFiles: ai?.truncatedFiles ?? 0, errors: ai?.errors ?? [] } }, null, 2) + '\n';
         latestFiles = collection.files;
         const dashboard: DashboardResult = {
           id: ++reportId, label, scope, score: result.score, fileCount: collection.files.length,
@@ -111,6 +123,7 @@ export function activate(context: vscode.ExtensionContext): void {
           checks: result.checkCoverage,
           ai: !aiEnabled ? '未启用' : `${ai?.reviewedFiles ?? 0}/${collection.files.length} 个文件，${ai?.errors.length ?? 0} 个失败项`,
           categoryScores: result.categoryScores,
+          fileScores: fileScores(result.findings, collection.files),
           findings: dashboardFindings(result.findings, collection.files)
         };
         sidebar.setResult(dashboard);
@@ -150,6 +163,16 @@ export function activate(context: vscode.ExtensionContext): void {
     await vscode.window.showTextDocument(document, { preview: false });
   }
 
+  async function exportJson(): Promise<void> {
+    if (!latestJson) { vscode.window.showInformationMessage('请先完成一次评分。'); return; }
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+    const destination = await vscode.window.showSaveDialog({ saveLabel: '导出评分 JSON', filters: { JSON: ['json'] },
+      defaultUri: root ? vscode.Uri.joinPath(root, 'shit-code-report.json') : undefined });
+    if (!destination) return;
+    await vscode.workspace.fs.writeFile(destination, new TextEncoder().encode(latestJson));
+    vscode.window.showInformationMessage(`评分 JSON 已导出：${destination.fsPath}`);
+  }
+
   async function handleSidebarAction(message: SidebarAction): Promise<void> {
     try {
       switch (message.action) {
@@ -159,6 +182,7 @@ export function activate(context: vscode.ExtensionContext): void {
         case 'openAiConfig': await openAiConfig(); break;
         case 'setApiKey': await vscode.commands.executeCommand('shitCodeDetector.setApiKey'); break;
         case 'openReport': await showReport(); break;
+        case 'exportJson': await exportJson(); break;
         case 'openFinding': {
           if (!Number.isInteger(message.index)) break;
           const item = sidebar.getFinding(message.index);
@@ -187,6 +211,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('shitCodeDetector.scanFiles', () => run('files')),
     vscode.commands.registerCommand('shitCodeDetector.scanRepository', () => run('repository')),
+    vscode.commands.registerCommand('shitCodeDetector.exportJson', () => exportJson()),
     vscode.commands.registerCommand('shitCodeDetector.openAiConfig', async () => {
       try { await openAiConfig(); }
       catch (error) { vscode.window.showErrorMessage(`Shit Code Detector：${error instanceof Error ? error.message : String(error)}`); }
@@ -215,8 +240,12 @@ function makeReport(label: string, scope: Scope, score: number, categoryScores: 
     `- 静态解析：${checkCoverage}`,
     `- AI：${!aiEnabled ? '未启用' : `${ai?.reviewedFiles ?? 0}/${files.length} 个文件完成语义审查；截断片段 ${ai?.truncatedFiles ?? 0} 个`}`,
     '', '## 分类分数', '',
-    '| 架构 | 风格 | 命名 | 可读性 | 一致性 | 正确性 |', '| ---: | ---: | ---: | ---: | ---: | ---: |',
-    `| ${categoryScores.architecture} | ${categoryScores.style} | ${categoryScores.naming} | ${categoryScores.readability} | ${categoryScores.consistency} | ${categoryScores.correctness} |`,
+    '| 架构 | 复杂度 | 重复 | 风格 | 命名 | 可读性 | 一致性 | 正确性 |', '| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    `| ${categoryScores.architecture} | ${categoryScores.complexity} | ${categoryScores.duplication} | ${categoryScores.style} | ${categoryScores.naming} | ${categoryScores.readability} | ${categoryScores.consistency} | ${categoryScores.correctness} |`,
+    '', '## 文件分数', '',
+    '文件分数只包含定位到该文件的问题；目录级和项目级问题计入总分。', '',
+    '| 文件 | 分数 | 问题数 |', '| --- | ---: | ---: |',
+    ...fileScores(findings, files).map(item => `| ${clean(item.path)} | ${item.score} | ${item.findings} |`),
     '', '## 具体问题', ''
   ];
   if (!findings.length) lines.push('没有发现符合当前规则的问题。');
