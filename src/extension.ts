@@ -4,6 +4,10 @@ import { writeFile } from 'node:fs/promises';
 import { CodeFile, Finding, mergeAnalysis } from './analysis';
 import { analyzeInWorker } from './analyzeAsync';
 import { AiResult, analyzeWithAi } from './ai';
+import { AI_BASE_POINTS, AI_CRITERIA, AI_RUBRIC_VERSION } from './aiRubric';
+import { finalScore, formattedFinalScore } from './scoreTransform';
+import { summaryMetrics } from './summaryMetrics';
+import { compareGitBaseline, GitBaseline } from './gitBaseline';
 import { cloneRepository, collectUris, directoryEntries, excludeIgnoredSelections, validateRepositoryUrl, workspaceEntries } from './collect';
 import { LocalAiConfig, localConfigName, readLocalAiConfig } from './localConfig';
 import { dashboardFindings, fileScores } from './dashboardData';
@@ -80,6 +84,8 @@ export function activate(context: vscode.ExtensionContext): void {
         try { result = await analyzeInWorker(collection.files, projectMode, analysisController.signal); }
         catch (error) { if (token.isCancellationRequested) throw new vscode.CancellationError(); throw error; }
         finally { analysisSubscription.dispose(); }
+        const baselineRoot = selectedWorkspace?.uri.fsPath ?? (scope === 'workspace' && vscode.workspace.workspaceFolders?.length === 1 ? vscode.workspace.workspaceFolders[0].uri.fsPath : undefined);
+        const baseline = scope === 'workspace' && baselineRoot ? await compareGitBaseline(baselineRoot, result) : undefined;
         let ai: AiResult | undefined;
         let localAi: LocalAiConfig = {};
         let localConfigError: string | undefined;
@@ -89,9 +95,9 @@ export function activate(context: vscode.ExtensionContext): void {
         if (aiEnabled) {
           const apiKey = localConfigError ? undefined : localAi.apiKey || await context.secrets.get(secretKey);
           if (localConfigError) {
-            ai = { findings: [], reviewedFiles: 0, truncatedFiles: 0, errors: [localConfigError] };
+            ai = { findings: [], assessments: [], reviewedFiles: 0, reviewedProject: false, truncatedFiles: 0, errors: [localConfigError] };
           } else if (!apiKey) {
-            ai = { findings: [], reviewedFiles: 0, truncatedFiles: 0, errors: [`AI 已启用，但没有 API Key。请填写工作区根目录 ${localConfigName} 的 apiKey，或使用“设置 AI API Key”命令。`] };
+            ai = { findings: [], assessments: [], reviewedFiles: 0, reviewedProject: false, truncatedFiles: 0, errors: [`AI 已启用，但没有 API Key。请填写工作区根目录 ${localConfigName} 的 apiKey，或使用“设置 AI API Key”命令。`] };
           } else {
             progress.report({ message: '请求 AI 审查' });
             const controller = new AbortController();
@@ -102,34 +108,44 @@ export function activate(context: vscode.ExtensionContext): void {
                 model: localAi.model || config.get<string>('ai.model', 'deepseek-v4-flash'),
                 apiKey,
                 maxFiles: config.get<number>('ai.maxFiles', 30),
-                maxCharsPerFile: config.get<number>('ai.maxCharsPerFile', 12000)
+                maxCharsPerFile: config.get<number>('ai.maxCharsPerFile', 12000),
+                changedPaths: baseline?.changedPaths
               }, projectMode, controller.signal);
             } finally { subscription.dispose(); }
             result = mergeAnalysis(result, ai.findings);
           }
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
-        const report = makeReport(label, scope, result.score, result.categoryScores, result.findings, collection.files, collection.skipped, result.checkCoverage, aiEnabled, ai);
+        const metrics = summaryMetrics(result, ai?.assessments.filter(item => item.grade === 'U').length ?? 0);
+        const report = makeReport(label, scope, result.score, result.categoryScores, result.findings, collection.files, collection.skipped, result.checkCoverage, aiEnabled, ai, metrics, baseline);
         latestReport = report;
-        latestJson = JSON.stringify({ schemaVersion: 1, target: label, scope, score: result.score,
-          fileCount: collection.files.length, categoryScores: result.categoryScores,
-          checkCoverage: result.checkCoverage, fileScores: fileScores(result.findings, collection.files),
-          findings: result.findings, skipped: collection.skipped,
-          ai: { enabled: aiEnabled, reviewedFiles: ai?.reviewedFiles ?? 0, truncatedFiles: ai?.truncatedFiles ?? 0, errors: ai?.errors ?? [] } }, null, 2) + '\n';
+        latestJson = JSON.stringify({ schemaVersion: 4, target: label, scope, score: finalScore(result.score), rawScore: result.score,
+          scoreFormula: '9*x^3/(x^3+64000)', fileCount: collection.files.length, categoryContributions: result.categoryScores,
+          metrics,
+          baseline: baseline ? { available: baseline.baselineAvailable, changedPaths: baseline.changedPaths, introduced: baseline.introduced.map(({ points, ...finding }) => finding), note: baseline.note } : undefined,
+          checkCoverage: result.checkCoverage, fileIssueCounts: fileScores(result.findings, collection.files).map(({ score, ...entry }) => entry),
+          findings: result.findings.map(({ points, ...finding }) => finding), skipped: collection.skipped,
+          ai: { enabled: aiEnabled, rubricVersion: AI_RUBRIC_VERSION, basePoints: AI_BASE_POINTS,
+            criteria: AI_CRITERIA, assessments: (ai?.assessments ?? []).map(({ basePoints, weight, points, ...item }) => item), reviewedFiles: ai?.reviewedFiles ?? 0,
+            reviewedProject: ai?.reviewedProject ?? false, truncatedFiles: ai?.truncatedFiles ?? 0, errors: ai?.errors ?? [] } }, null, 2) + '\n';
         latestFiles = collection.files;
         const dashboard: DashboardResult = {
-          id: ++reportId, label, scope, score: result.score, fileCount: collection.files.length,
+          id: ++reportId, label, scope, score: finalScore(result.score), scoreDisplay: formattedFinalScore(result.score), fileCount: collection.files.length,
+          density: metrics.issueDensity.toFixed(1) + ' / 千行', highRisk: metrics.highRisk,
+          baseline: baseline?.baselineAvailable ? `${baseline.changedPaths.length} 个变更文件，${baseline.introduced.length} 条新增本地问题` : baseline?.note,
           skipped: `不支持 ${collection.skipped.unsupported} / 超大 ${collection.skipped.large} / 二进制 ${collection.skipped.binary} / 读取失败 ${collection.skipped.unreadable}`,
           checks: result.checkCoverage,
-          ai: !aiEnabled ? '未启用' : `${ai?.reviewedFiles ?? 0}/${collection.files.length} 个文件，${ai?.errors.length ?? 0} 个失败项`,
-          categoryScores: result.categoryScores,
-          fileScores: fileScores(result.findings, collection.files),
+          ai: !aiEnabled ? '未启用' : `${ai?.reviewedFiles ?? 0}/${collection.files.length} 个文件完整分级，项目 ${ai?.reviewedProject ? '完成' : '未完成'}，${ai?.assessments.filter(item => item.adjustedFrom).length ?? 0} 项校验降级，${ai?.errors.length ?? 0} 个失败项`,
+          aiAssessments: (ai?.assessments ?? []).map(({ basePoints, weight, points, ...item }) => item),
+          categoryCounts: Object.fromEntries(Object.keys(result.categoryScores).map(category =>
+            [category, result.findings.filter(finding => finding.category === category).length])) as Record<keyof typeof result.categoryScores, number>,
+          fileScores: fileScores(result.findings, collection.files).map(({ score, ...item }) => item),
           findings: dashboardFindings(result.findings, collection.files)
         };
         sidebar.setResult(dashboard);
         await sidebar.reveal();
-        output.appendLine(`${new Date().toISOString()} ${label}: ${result.score} 分，${collection.files.length} 个文件`);
-        vscode.window.showInformationMessage(`Shit Code Detector：${result.score} 分，发现 ${result.findings.length} 个问题。`);
+        output.appendLine(`${new Date().toISOString()} ${label}: ${formattedFinalScore(result.score)} / 9，${collection.files.length} 个文件`);
+        vscode.window.showInformationMessage(`Shit Code Detector：${formattedFinalScore(result.score)} / 9，发现 ${result.findings.length} 个问题。`);
       });
     } catch (error) {
       if (error instanceof vscode.CancellationError) sidebar.setBusy(false, '已取消评分');
@@ -228,37 +244,60 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void { /* 无持久进程 */ }
 
-function makeReport(label: string, scope: Scope, score: number, categoryScores: Record<string, number>, findings: Finding[], files: CodeFile[], skipped: Record<string, number>, checkCoverage: string, aiEnabled: boolean, ai?: AiResult): string {
+function makeReport(label: string, scope: Scope, rawScore: number, categoryScores: Record<string, number>, findings: Finding[], files: CodeFile[], skipped: Record<string, number>, checkCoverage: string, aiEnabled: boolean, ai: AiResult | undefined, metrics: ReturnType<typeof summaryMetrics>, baseline?: GitBaseline): string {
   const clean = (value: string): string => value.replaceAll('|', '\\|').replaceAll('\n', ' ').replaceAll('`', 'ˋ');
+  const severity = (finding: Finding): string => finding.aiGrade ? ({ B: '轻微', C: '一般', D: '较重', E: '严重' } as const)[finding.aiGrade]
+    : finding.points >= 6 ? '严重' : finding.points >= 4 ? '较重' : finding.points >= 2 ? '一般' : '轻微';
+  const categoryCounts = Object.fromEntries(Object.keys(categoryScores).map(category =>
+    [category, findings.filter(finding => finding.category === category).length]));
   const lines = [
     '# Shit Code Detector 评分报告', '',
     `- 对象：${clean(label)}`,
     `- 模式：${scope === 'workspace' ? '工作区' : scope === 'files' ? '选定文件' : 'HTTPS Git 仓库'}`,
-    `- 总分：**${score}**（越高越 shit，无上限）`,
+    `- 最终分：**${formattedFinalScore(rawScore)} / 9**（越高越 shit）`,
+    `- 问题密度：${metrics.issueDensity.toFixed(1)} / 千行有效代码（小项目按 200 行平滑）`,
+    `- 高风险状态：${metrics.highRisk ? '发现静态确认的高风险正确性或安全问题' : '未发现静态确认的高风险问题'}`,
     `- 已分析：${files.length} 个代码文件`,
     `- 跳过：不支持或生成文件 ${skipped.unsupported}，超大文件 ${skipped.large}，二进制 ${skipped.binary}，读取失败 ${skipped.unreadable}`,
     `- 静态解析：${checkCoverage}`,
-    `- AI：${!aiEnabled ? '未启用' : `${ai?.reviewedFiles ?? 0}/${files.length} 个文件完成语义审查；截断片段 ${ai?.truncatedFiles ?? 0} 个`}`,
-    '', '## 分类分数', '',
-    '| 架构 | 复杂度 | 重复 | 风格 | 命名 | 可读性 | 一致性 | 正确性 |', '| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
-    `| ${categoryScores.architecture} | ${categoryScores.complexity} | ${categoryScores.duplication} | ${categoryScores.style} | ${categoryScores.naming} | ${categoryScores.readability} | ${categoryScores.consistency} | ${categoryScores.correctness} |`,
-    '', '## 文件分数', '',
-    '文件分数只包含定位到该文件的问题；目录级和项目级问题计入总分。', '',
-    '| 文件 | 分数 | 问题数 |', '| --- | ---: | ---: |',
-    ...fileScores(findings, files).map(item => `| ${clean(item.path)} | ${item.score} | ${item.findings} |`),
+    `- AI：${!aiEnabled ? '未启用' : `${ai?.reviewedFiles ?? 0}/${files.length} 个文件完成全部条目分级；项目分级${ai?.reviewedProject ? '完成' : '未完成'}；截断片段 ${ai?.truncatedFiles ?? 0} 个`}`,
+    `- AI 未完成条目：${metrics.uncertainAssessments}`, '', '## 语言覆盖', '',
+    '| 语言 | 文件数 | 分析能力 | 语法失败文件数 |', '| --- | ---: | --- | ---: |',
+    ...metrics.languageCoverage.map(item => `| ${item.language} | ${item.files} | ${item.parser} | ${item.parseFailures} |`),
+    '', '## Git 增量', '',
+    baseline?.baselineAvailable ? `相对 HEAD，${baseline.changedPaths.length} 个变更文件中发现 ${baseline.introduced.length} 条新增本地规则问题。` : baseline?.note ?? '此模式不提供 Git 基线。',
+    ...(baseline?.introduced.length ? ['', '| 严重程度 | 位置 | 说明 |', '| --- | --- | --- |',
+      ...baseline.introduced.map(item => `| ${severity(item)} | ${clean(item.path)}${item.line ? `:${item.line}` : ''} | ${clean(item.message)} |`)] : []),
+    '', '## 分类问题数', '',
+    '| 架构 | 复杂度 | 重复 | 风格 | 命名 | 可读性 | 一致性 | 正确性 | 安全 |', '| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    `| ${categoryCounts.architecture} | ${categoryCounts.complexity} | ${categoryCounts.duplication} | ${categoryCounts.style} | ${categoryCounts.naming} | ${categoryCounts.readability} | ${categoryCounts.consistency} | ${categoryCounts.correctness} | ${categoryCounts.security} |`,
+    '', '## AI 分项评分', '',
+    `评分表版本：${AI_RUBRIC_VERSION}。等级基础分：${Object.entries(AI_BASE_POINTS).map(([grade, points]) => `${grade}=${points}`).join('、')}；内部按基础分 × 固定权重累计。`, '',
+    '| 条目 | 范围 | 类别 | 权重 |', '| --- | --- | --- | ---: |',
+    ...AI_CRITERIA.map(item => `| ${clean(item.title)} | ${item.scope === 'file' ? '文件' : '项目'} | ${item.category} | ${item.weight} |`),
+    '',
+    ...(ai?.assessments.length ? [
+      '| 对象 | 条目 | 等级 | 严重程度 | 证据 |', '| --- | --- | --- | --- | --- |',
+      ...ai.assessments.map(item => `| ${clean(item.path)} | ${clean(item.title)} | ${item.grade}${item.adjustedFrom ? `（原建议 ${item.adjustedFrom}，校验后）` : ''} | ${{ A: '无问题', B: '轻微', C: '一般', D: '较重', E: '严重', 'N/A': '不适用', U: '未完成' }[item.grade]} | ${clean(item.reason)} |`),
+      ''
+    ] : ['没有已完成的 AI 分项评分。', '']),
+    '## 文件分数', '',
+    '文件问题数只包含定位到该文件的问题；项目级问题计入总分。', '',
+    '| 文件 | 问题数 |', '| --- | ---: |',
+    ...fileScores(findings, files).map(item => `| ${clean(item.path)} | ${item.findings} |`),
     '', '## 具体问题', ''
   ];
   if (!findings.length) lines.push('没有发现符合当前规则的问题。');
   else {
-    lines.push('| 分数 | 类别 | 来源 | 位置 | 说明 |', '| ---: | --- | --- | --- | --- |');
+    lines.push('| 严重程度 | 类别 | 证据类型 | 置信度 | 位置 | 说明 |', '| --- | --- | --- | --- | --- | --- |');
     for (const finding of [...findings].sort((a, b) => b.points - a.points || a.path.localeCompare(b.path))) {
       const file = files.find(item => item.path === finding.path);
       const location = `${finding.path}${finding.line ? `:${finding.line}` : ''}`;
       const linked = file?.uri ? `[${clean(location)}](${file.uri}${finding.line ? `#L${finding.line}` : ''})` : clean(location);
-      lines.push(`| +${finding.points} | ${finding.category} | ${finding.source} | ${linked} | ${clean(finding.message)} |`);
+      lines.push(`| ${severity(finding)} | ${finding.category} | ${finding.evidenceType === 'ai-inference' ? 'AI 推断' : '静态确认'} | ${finding.confidence ?? '中'} | ${linked} | ${clean(finding.message)} |`);
     }
   }
   if (ai?.errors.length) lines.push('', '## AI 未完成项', '', ...ai.errors.map(error => `- ${clean(error)}`));
-  lines.push('', '## 评分说明', '', '总分 = 所有本地规则罚分 + 所有有效 AI 问题罚分；AI 严重度 1–5 分别折算为 2、4、6、8、10 分。分数不截断、不归一化。架构评估仅用于工作区和 Git 仓库模式；详见 `SCORING.md`。', '');
+  lines.push('', '## 评分说明', '', '内部累计值 x = 本地规则分类聚合值（维护性信号含规模平滑，各类上限和系数见 SCORING.md）+ Σ（有效 AI 分项基础分 × 固定条目权重）；最终分 f(x)=9x³/(x³+64000)。AI 条目不受本地类别系数与规模平滑影响。A 不计分；U 表示未审查完成，N/A 表示不适用。静态规则匹配不等于运行测试。详见 `SCORING.md` 与 `AI_RUBRIC.md`。', '');
   return lines.join('\n');
 }

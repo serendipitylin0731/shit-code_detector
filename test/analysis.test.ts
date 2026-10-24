@@ -11,12 +11,13 @@ test('识别多种语言与特殊文件名', () => {
   assert.equal(languageOf('image.png'), undefined);
 });
 
-test('按问题逐条累加且总分没有上限', () => {
+test('重复格式问题保留明细但聚合上限阻止其淹没真实缺陷', () => {
   const source = Array.from({ length: 250 }, () => 'const foo = 1;  ').join('\n');
   const result = analyze([file('bad.ts', source)], [], false);
-  assert.equal(result.categoryScores.naming, 500);
-  assert.equal(result.categoryScores.style, 250);
-  assert.equal(result.score, 750);
+  assert.equal(result.categoryScores.naming, 0);
+  assert.equal(result.categoryScores.style, 12);
+  assert.equal(result.score, 12);
+  assert.equal(result.findings.filter(item => item.rule === 'trailing-space').length, 250);
 });
 
 test('架构规则只在项目模式运行，跨文件缩进不一致可定位', () => {
@@ -26,7 +27,7 @@ test('架构规则只在项目模式运行，跨文件缩进不一致可定位',
   const files = [file('long.py', long), file('a.py', tabs), file('b.py', spaces)];
   const project = analyze(files);
   const selection = analyze(files, [], false);
-  assert.ok(project.findings.some(f => f.rule === 'large-file' && f.points === 2));
+  assert.ok(!project.findings.some(f => f.rule === 'large-file'));
   assert.ok(project.findings.some(f => f.rule === 'indent-style'));
   assert.ok(!selection.findings.some(f => f.rule === 'large-file'));
 });

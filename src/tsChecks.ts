@@ -33,20 +33,12 @@ export function inspectTypeScript(file: CodeFile): Finding[] {
   const scanner = ts.createScanner(ts.ScriptTarget.Latest, false,
     scriptKind === ts.ScriptKind.TSX || scriptKind === ts.ScriptKind.JSX ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard,
     file.content);
-  let spacedComments = 0;
-  let compactComments = 0;
-  let firstCompactLine = 0;
   for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
     if (kind === ts.SyntaxKind.SingleLineCommentTrivia && /^\/\/(?![/!<#])\S/.test(scanner.getTokenText())) {
       const line = lineAt(scanner.getTokenPos());
-      compactComments++;
-      firstCompactLine ||= line;
       add(line, 'style', 'comment-spacing', 1, '// 注释标记后应留一个空格');
-    } else if (kind === ts.SyntaxKind.SingleLineCommentTrivia && /^\/\/\s+\S/.test(scanner.getTokenText())) {
-      spacedComments++;
     }
   }
-  if (spacedComments && compactComments) add(firstCompactLine, 'consistency', 'comment-style', 2, '同一文件的普通注释混用了带空格和不带空格的标记格式');
 
   function visit(node: Ts.Node): void {
     if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isEnumMember(node)) && node.initializer) {
@@ -75,23 +67,20 @@ export function inspectTypeScript(file: CodeFile): Finding[] {
     if (isFunction(node)) {
       const first = lineAt(node.getStart(source));
       const length = lineAt(node.end) - first + 1;
-      if (length > 120) add(first, 'readability', 'long-function', Math.ceil((length - 120) / 60) * 2, `函数长 ${length} 行，建议按职责拆分`);
+      // Length is only a supporting signal when control flow is also complex.
       const name = functionName(node);
-      const parameters = (node as Ts.FunctionLikeDeclaration).parameters?.length ?? 0;
-      if (parameters > 6) add(first, 'readability', 'many-parameters', Math.ceil((parameters - 6) / 2) * 2, `函数“${name}”有 ${parameters} 个参数，调用方难以理解参数含义`);
       const body = (node as Ts.FunctionLikeDeclaration).body;
       if (body) {
-        const { complexity, nesting } = functionComplexity(body);
-        if (complexity > 10) add(first, 'complexity', 'cyclomatic-complexity', Math.ceil((complexity - 10) / 3) * 2, `函数“${name}”圈复杂度 ${complexity}，超过阈值 10`);
-        if (nesting > 4) add(first, 'complexity', 'control-nesting', (nesting - 4) * 2, `函数“${name}”控制流嵌套 ${nesting} 层，超过阈值 4`);
+        const { complexity, nesting, cognitive } = functionComplexity(body);
+        if (length > 180 && complexity > 10) add(first, 'readability', 'long-function', 2, `函数长 ${length} 行且分支较多，建议检查职责划分`);
+        if (cognitive > 15) add(first, 'complexity', 'cognitive-complexity', Math.ceil((cognitive - 15) / 5) * 2, `函数“${name}”认知复杂度 ${cognitive}，阅读控制流较困难`);
+        else if (complexity > 10) add(first, 'complexity', 'cyclomatic-complexity', Math.ceil((complexity - 10) / 3) * 2, `函数“${name}”圈复杂度 ${complexity}，超过阈值 10`);
+        if (nesting > 4 && cognitive <= 15) add(first, 'complexity', 'control-nesting', (nesting - 4) * 2, `函数“${name}”控制流嵌套 ${nesting} 层，超过阈值 4`);
       }
     }
     if (ts.isCatchClause(node)) {
       const statements = node.block.statements;
       if (!statements.length) add(lineAt(node.getStart(source)), 'correctness', 'swallowed-error', 5, '空 catch 块吞掉异常，失败时没有可观察结果');
-      else if (statements.length === 1 && ts.isExpressionStatement(statements[0]) && isConsoleCall(statements[0].expression)) {
-        add(lineAt(node.getStart(source)), 'correctness', 'log-only-error', 3, 'catch 仅打印异常，调用方无法获知失败');
-      }
     }
     if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && isNullishLiteral(node.expression)) {
       add(lineAt(node.getStart(source)), 'correctness', 'null-dereference', 5, '直接访问 null/undefined 的成员会抛出 TypeError');
@@ -104,6 +93,15 @@ export function inspectTypeScript(file: CodeFile): Finding[] {
         node.expression.name.text === 'parse' && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0])) {
       try { JSON.parse(node.arguments[0].text); }
       catch { add(lineAt(node.getStart(source)), 'correctness', 'invalid-json-parse', 4, 'JSON.parse 的字面量参数不是合法 JSON，执行时会抛出 SyntaxError'); }
+    }
+    if (ts.isBlock(node)) {
+      for (let index = 1; index < node.statements.length; index++) {
+        const previous = node.statements[index - 1];
+        if (ts.isReturnStatement(previous) || ts.isThrowStatement(previous) || ts.isBreakStatement(previous) || ts.isContinueStatement(previous)) {
+          add(lineAt(node.statements[index].getStart(source)), 'correctness', 'unreachable-code', 4, '前一条语句已终止当前控制流，后续代码不可达');
+          break;
+        }
+      }
     }
     ts.forEachChild(node, visit);
   }
@@ -126,25 +124,21 @@ function functionName(node: Ts.Node): string {
   return '<匿名函数>';
 }
 
-function functionComplexity(body: Ts.Node): { complexity: number; nesting: number } {
+function functionComplexity(body: Ts.Node): { complexity: number; nesting: number; cognitive: number } {
   let complexity = 1;
   let nesting = 0;
+  let cognitive = 0;
   function visit(node: Ts.Node, depth: number): void {
     if (node !== body && isFunction(node)) return;
     const branch = ts.isIfStatement(node) || ts.isForStatement(node) || ts.isForInStatement(node) ||
       ts.isForOfStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node) ||
       ts.isCatchClause(node) || ts.isConditionalExpression(node) || ts.isCaseClause(node);
-    if (branch) complexity++;
-    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(node.operatorToken.kind)) complexity++;
+    if (branch) { complexity++; cognitive += 1 + depth; }
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(node.operatorToken.kind)) { complexity++; cognitive++; }
     const next = branch ? depth + 1 : depth;
     nesting = Math.max(nesting, next);
     ts.forEachChild(node, child => visit(child, next));
   }
   visit(body, 0);
-  return { complexity, nesting };
-}
-
-function isConsoleCall(node: Ts.Node): boolean {
-  return ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
-    ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'console';
+  return { complexity, nesting, cognitive };
 }

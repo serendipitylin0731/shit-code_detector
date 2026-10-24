@@ -6,7 +6,7 @@ import { fileScores } from '../src/dashboardData';
 
 const file = (name: string, content: string): CodeFile => ({ path: name, language: languageOf(name)!, content });
 
-test('JS/TS 与 Python 函数复杂度、嵌套、参数和吞错逐项计分', () => {
+test('JS/TS 与 Python 复杂度和明确吞错计分，不因参数数量或宽泛捕获误判', () => {
   const js = file('src/branch.ts', `function calculate(a,b,c,d,e,f,g) {
 ${Array.from({ length: 11 }, (_, index) => `  if (a > ${index}) a += ${index};`).join('\n')}
   try { return a; } catch (error) {}
@@ -21,15 +21,15 @@ ${Array.from({ length: 11 }, (_, index) => `    if a > ${index}: a += ${index}`)
   const result = analyze([js, py], [], false);
   for (const name of ['src/branch.ts', 'src/branch.py']) {
     const rules = new Set(result.findings.filter(item => item.path === name).map(item => item.rule));
-    assert.ok(rules.has('many-parameters'), name);
-    assert.ok(rules.has('cyclomatic-complexity'), name);
+    assert.ok(!rules.has('many-parameters'), name);
+    assert.ok(rules.has('cyclomatic-complexity') || rules.has('cognitive-complexity'), name);
     assert.ok(rules.has('swallowed-error'), name);
   }
   assert.ok(!result.findings.some(item => item.rule === 'broad-except'), '单个异常处理缺陷不重复计分');
   const broad = analyze([file('src/broad.py', 'try:\n    work()\nexcept Exception:\n    recover()\n')], [], false);
-  assert.ok(broad.findings.some(item => item.rule === 'broad-except'));
+  assert.ok(!broad.findings.some(item => item.rule === 'broad-except'));
   const nested = analyze([file('src/deep.py', 'def f(x):\n    if x:\n        if x:\n            if x:\n                if x:\n                    if x:\n                        return x\n')], [], false);
-  assert.ok(nested.findings.some(item => item.rule === 'control-nesting'));
+  assert.ok(nested.findings.some(item => item.rule === 'control-nesting' || item.rule === 'cognitive-complexity'));
 });
 
 test('重复块跨文件查找，导入环仅在项目模式计分', () => {
@@ -47,7 +47,7 @@ test('重复块跨文件查找，导入环仅在项目模式计分', () => {
   assert.equal(selected.findings.filter(item => item.rule === 'duplicate-block').length, 1);
   const ranking = fileScores(project.findings, files);
   assert.ok(ranking[0].score >= ranking[1].score);
-  assert.equal(ranking.reduce((sum, item) => sum + item.score, 0), project.score);
+  assert.ok(ranking.reduce((sum, item) => sum + item.score, 0) >= project.score, '文件排序使用未聚合的问题权重');
   const typeOnly = [file('src/a.ts', "import type { B } from './b';\nexport type A = B;"),
     file('src/b.ts', "import type { A } from './a';\nexport type B = A;")];
   assert.equal(analyze(typeOnly).findings.filter(item => item.rule === 'import-cycle').length, 0);

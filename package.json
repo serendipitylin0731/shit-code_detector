@@ -1,8 +1,8 @@
 {
   "name": "shit-code-detector",
   "displayName": "Shit Code Detector",
-  "description": "对多语言代码库进行可解释、分数无上限的质量分析",
-  "version": "0.4.0",
+  "description": "对多语言代码库进行可解释的 0–9 分质量分析",
+  "version": "0.5.0",
   "publisher": "serendipitylin0731",
   "author": "_serendipity",
   "license": "MIT",
@@ -117,6 +117,7 @@
     "compile": "tsc -p . && node scripts/copy-parser.js",
     "test": "npm run compile && node --test dist/test/*.test.js",
     "test:ai": "npm run compile && node scripts/test-ai.js",
+    "docs:rubric": "npm run compile && node scripts/generate-ai-rubric.js",
     "fixtures": "npm run compile && node scripts/create-fixtures.js",
     "package": "npm run compile && node scripts/package.js"
   },

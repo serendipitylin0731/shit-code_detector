@@ -6,7 +6,8 @@ export interface DashboardFinding {
   line?: number;
   category: string;
   source: string;
-  points: number;
+  confidence: 'high' | 'medium' | 'low';
+  evidenceType: 'static-confirmed' | 'ai-inference';
   message: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
   openable: boolean;
@@ -33,9 +34,11 @@ export function dashboardFindings(findings: Finding[], files: CodeFile[]): Dashb
       line: finding.line,
       category: finding.category,
       source: finding.source,
-      points: finding.points,
+      confidence: finding.confidence ?? 'medium',
+      evidenceType: finding.evidenceType ?? (finding.source === 'ai' ? 'ai-inference' : 'static-confirmed'),
       message: finding.message,
-      severity: finding.points >= 6 ? 'critical' : finding.points >= 4 ? 'high' : finding.points >= 2 ? 'medium' : 'low',
+      severity: finding.aiGrade ? ({ B: 'low', C: 'medium', D: 'high', E: 'critical' } as const)[finding.aiGrade]
+        : finding.points >= 6 ? 'critical' : finding.points >= 4 ? 'high' : finding.points >= 2 ? 'medium' : 'low',
       openable: available.has(finding.path)
     }));
 }

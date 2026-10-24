@@ -29,24 +29,13 @@ def inspect_file(item):
     except (ValueError, TypeError, MemoryError, RecursionError):
         return findings
 
-    assigned_names = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             length = (node.end_lineno or node.lineno) - node.lineno + 1
-            if length > 120:
+            if length > 180 and function_complexity(node)[0] > 10:
                 add(node.lineno, "readability", "long-function",
                     ((length - 121) // 60 + 1) * 2,
                     f"函数长 {length} 行，建议按职责拆分")
-            arguments = node.args
-            parameter_count = (len(arguments.posonlyargs) + len(arguments.args) +
-                               len(arguments.kwonlyargs) + int(arguments.vararg is not None) +
-                               int(arguments.kwarg is not None))
-            if arguments.args and arguments.args[0].arg in {"self", "cls"}:
-                parameter_count -= 1
-            if parameter_count > 6:
-                add(node.lineno, "readability", "many-parameters",
-                    ((parameter_count - 7) // 2 + 1) * 2,
-                    f"函数“{node.name}”有 {parameter_count} 个参数，调用方难以理解参数含义")
             complexity, nesting = function_complexity(node)
             if complexity > 10:
                 add(node.lineno, "complexity", "cyclomatic-complexity",
@@ -55,6 +44,15 @@ def inspect_file(item):
             if nesting > 4:
                 add(node.lineno, "complexity", "control-nesting", (nesting - 4) * 2,
                     f"函数“{node.name}”控制流嵌套 {nesting} 层，超过阈值 4")
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.If,
+                             ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith,
+                             ast.Try, ast.ExceptHandler)):
+            for body in (getattr(node, "body", []), getattr(node, "orelse", []), getattr(node, "finalbody", [])):
+                for previous, current in zip(body, body[1:]):
+                    if isinstance(previous, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+                        add(current.lineno, "correctness", "unreachable-code", 4,
+                            "前一条语句已终止当前控制流，后续代码不可达")
+                        break
         if isinstance(node, ast.ExceptHandler):
             broad = node.type is None or (isinstance(node.type, ast.Name) and
                     node.type.id in {"Exception", "BaseException"})
@@ -65,12 +63,6 @@ def inspect_file(item):
                 if silent and broad and not is_test:
                     add(node.lineno, "correctness", "swallowed-error", 5,
                         "宽泛 except 块直接跳过异常，失败时没有可观察结果")
-                elif broad and not is_test:
-                    add(node.lineno, "correctness", "broad-except", 3,
-                        "异常处理捕获所有异常，包括可能需要中断运行的异常")
-            elif broad and not is_test:
-                add(node.lineno, "correctness", "broad-except", 3,
-                    "异常处理捕获所有异常，包括可能需要中断运行的异常")
         if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
             right = node.right
             if isinstance(right, ast.Constant) and isinstance(right.value, (int, float, complex)) and right.value == 0:
@@ -83,14 +75,6 @@ def inspect_file(item):
             if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, int):
                 add(node.lineno, "correctness", "empty-index", 5,
                     "对空列表或元组按整数下标取值会抛出 IndexError")
-        if not is_test and isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                if isinstance(target, ast.Name) and target.id.lower() in {"foo", "bar", "baz", "tmp", "temp", "thing", "stuff", "xxx"}:
-                    if target.id not in assigned_names:
-                        assigned_names.add(target.id)
-                        add(target.lineno, "naming", "vague-name", 2,
-                            f"变量名“{target.id}”缺乏具体含义")
 
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
@@ -98,19 +82,13 @@ def inspect_file(item):
         return findings
     previous = None
     depth = 0
-    comment_styles = set()
-    first_compact_comment = None
     operators = {"=", "+=", "-=", "==", "!=", "<", ">", "<=", ">=", "+", "-"}
     unary_context = {"(", "[", "{", ",", ":", "=", "return", "yield", "if", "else"}
     for token in tokens:
         if token.type == tokenize.COMMENT:
             comment = token.string
             if not (token.start[0] == 1 and comment.startswith("#!")) and len(comment) > 1:
-                if comment[1] == " ":
-                    comment_styles.add("spaced")
-                elif comment[1] not in "#!:" and not comment.startswith(("#noqa", "#type:", "#pylint:", "#fmt:", "#ruff:", "#pyright:")):
-                    comment_styles.add("compact")
-                    first_compact_comment = first_compact_comment or token.start[0]
+                if comment[1] not in " #!:" and not comment.startswith(("#noqa", "#type:", "#pylint:", "#fmt:", "#ruff:", "#pyright:")):
                     add(token.start[0], "style", "comment-spacing", 1,
                         "# 注释标记后应留一个空格")
         elif token.type == tokenize.OP:
@@ -130,9 +108,6 @@ def inspect_file(item):
                 depth = max(0, depth - 1)
         if token.type not in (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENCODING):
             previous = token.string
-    if len(comment_styles) > 1 and first_compact_comment:
-        add(first_compact_comment, "consistency", "comment-style", 2,
-            "同一文件的普通注释混用了带空格和不带空格的标记格式")
     return findings
 
 

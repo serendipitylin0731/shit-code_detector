@@ -11,9 +11,6 @@ export function inspectGeneral(file: CodeFile): Finding[] {
   };
   const lines = file.content.split(/\r?\n/);
   let inBlockComment = false;
-  let spacedComments = 0;
-  let compactComments = 0;
-  let firstCompactLine = 0;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     const number = index + 1;
@@ -24,11 +21,7 @@ export function inspectGeneral(file: CodeFile): Finding[] {
     const masked = maskLine(line, inBlockComment);
     inBlockComment = masked.inBlockComment;
     if (slashComments.has(file.language) && masked.comment && /^\/\/(?![/!<#])\S/.test(masked.comment)) {
-      compactComments++;
-      firstCompactLine ||= number;
       add(number, 'style', 'comment-spacing', 1, '// 注释标记后应留一个空格');
-    } else if (slashComments.has(file.language) && masked.comment && /^\/\/\s+\S/.test(masked.comment)) {
-      spacedComments++;
     }
     if (cLikeSpacing.has(file.language) && !/^\s*#/.test(line) && !/\boperator\s*=/.test(masked.code)) {
       const pattern = /==|!=|<=|>=|\+=|-=|\*=|\/=|:=|(?<![!<>=+\-*/%&|^])=(?![=><])/g;
@@ -41,7 +34,6 @@ export function inspectGeneral(file: CodeFile): Finding[] {
       }
     }
   }
-  if (spacedComments && compactComments) add(firstCompactLine, 'consistency', 'comment-style', 2, '同一文件的普通注释混用了带空格和不带空格的标记格式');
   return findings;
 }
 

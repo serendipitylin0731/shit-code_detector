@@ -58,6 +58,21 @@ export const qualityCases: { name: string; files: CodeFile[] }[] = [
         '    bar = 2',
         '    temp = foo + bar',
         '    return temp'
+      ].join('\n')),
+      code('src/unsafe.ts', 'TypeScript', [
+        "import { helper } from './dependency';",
+        'export function run(): number {',
+        '  null.value;',
+        '  JSON.parse("{bad}");',
+        '  try { throw new Error("boom"); } catch (error) {}',
+        '  return helper();',
+        '}'
+      ].join('\n')),
+      code('src/dependency.ts', 'TypeScript', [
+        "import { run } from './unsafe';",
+        'export function helper(): number {',
+        '  return run();',
+        '}'
       ].join('\n'))
     ]
   }

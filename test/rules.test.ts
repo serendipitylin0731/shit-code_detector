@@ -4,7 +4,7 @@ import { analyze, CodeFile, languageOf } from '../src/analysis';
 
 const file = (name: string, content: string): CodeFile => ({ path: name, language: languageOf(name)!, content });
 
-test('空行和文件长度阈值放宽后只在超出部分加分', () => {
+test('空行阈值放宽，文件长度不单独作为缺陷', () => {
   const fourBlanks = analyze([file('a.py', 'x = 1\n\n\n\n\ny = 2')]);
   const fiveBlanks = analyze([file('a.py', 'x = 1\n\n\n\n\n\ny = 2')]);
   assert.ok(!fourBlanks.findings.some(finding => finding.rule === 'blank-run'));
@@ -12,7 +12,7 @@ test('空行和文件长度阈值放宽后只在超出部分加分', () => {
   const short = analyze([file('short.py', Array(800).fill('pass').join('\n'))]);
   const long = analyze([file('long.py', Array(801).fill('pass').join('\n'))]);
   assert.ok(!short.findings.some(finding => finding.rule === 'large-file'));
-  assert.ok(long.findings.some(finding => finding.rule === 'large-file' && finding.points === 2));
+  assert.ok(!long.findings.some(finding => finding.rule === 'large-file'));
 });
 
 test('JS/TS 解析器区分运算符、字符串与语法错误', () => {
@@ -57,11 +57,11 @@ test('语言惯用写法不误判为空格与命名问题', () => {
   assert.ok(!keyword.findings.some(finding => finding.rule === 'operator-spacing'));
 });
 
-test('同一文件混用注释标记格式只加一次一致性分', () => {
+test('注释空格缺陷不再独立触发重复的一致性扣分', () => {
   const python = analyze([file('comments.py', '# Good explanation\n#bad explanation\nvalue = 1')], [], false);
   const typescript = analyze([file('comments.ts', '// Good explanation\n//bad explanation\nconst value = 1;')], [], false);
   for (const result of [python, typescript]) {
     assert.equal(result.findings.filter(finding => finding.rule === 'comment-spacing').length, 1);
-    assert.equal(result.findings.filter(finding => finding.rule === 'comment-style').length, 1);
+    assert.equal(result.findings.filter(finding => finding.rule === 'comment-style').length, 0);
   }
 });

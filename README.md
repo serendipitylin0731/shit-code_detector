@@ -2,21 +2,21 @@
 
 作者：**_serendipity**
 
-Shit Code Detector 是一个 VS Code 插件，用可解释的扣分项给代码库打“shit 分”：问题越多、影响越大，分数越高，**没有上限**。支持整个工作区、手动选择的文件，以及 HTTPS Git 仓库。默认在本地运行确定性规则；启用 AI 后，可用 DeepSeek 等兼容 Chat Completions 的 API 补充语义和架构审查。质量维度参考 [Done-0/fuck-u-code](https://github.com/Done-0/fuck-u-code)，但采用独立实现与无上限的逐项加分公式；对应关系见 [REFERENCE.md](REFERENCE.md)。
+Shit Code Detector 是一个 VS Code 插件。它先累计内部问题分，再通过 `f(x)=9x³/(x³+64000)` 输出 **0–9 分**的“shit 分”：越接近 9，代码问题越严重。支持整个工作区、手动选择的文件，以及 HTTPS Git 仓库。默认在本地运行确定性规则；启用 AI 后，可用 DeepSeek 等兼容 Chat Completions 的 API 按固定 A–E 评分表补充语义和架构审查。质量维度参考 [Done-0/fuck-u-code](https://github.com/Done-0/fuck-u-code)，具体取舍见 [REFERENCE.md](REFERENCE.md)。
 
 评分回归使用仓库内可重复的好、中、差三档样本；真实项目补充验证使用 [psf/requests](https://github.com/psf/requests)。测试数据和结果见 [VALIDATION.md](VALIDATION.md)。
 
 ## 功能
 
-- **左侧活动栏界面**：顶部显示无上限总分，显示问题最多的文件及每个文件的分数；每条问题列出加分、类别、严重程度、位置和理由，支持按文件与类别筛选、翻页和跳转。
+- **左侧活动栏界面**：顶部显示 0–9 最终分，显示问题最多的文件和各类问题数量；每条问题只显示严重程度、类别、位置和理由，不显示单条加分。支持按文件与类别筛选、翻页和跳转。
 - **评分工作区**：可选择一个工作区或全部工作区；多根工作区保留根目录名称。
 - **选择文件评分**：从文件对话框选择一个或多个代码文件，只评估文件本身。
 - **评分 HTTPS Git 仓库**：浅克隆到临时目录，扫描后删除临时目录；不执行仓库代码。
-- **更细的本地规则**：检查运算符空格、注释格式、函数长度、圈复杂度、控制流嵌套、参数数量、重复代码、循环依赖、异常处理、C/C++ 宏风险，以及 Python/JS/TS 可静态确定的语法与明显运行异常。
+- **本地静态分析**：检查运算符空格、注释格式、圈复杂度、认知复杂度、控制流嵌套、不可达代码、重复代码、循环依赖、异常处理、C/C++ 宏风险，以及 Python/JS/TS 的可确定语法与运行异常。格式分设聚合上限；文件长度、目录文件数和 `tmp` 等名称不单独判定代码质量。
 - **大项目可响应**：本地解析与评分在工作线程运行，可取消，不阻塞 VS Code 扩展主线程。
 - **遵循 `.gitignore`**：工作区、选定文件和克隆仓库均按根目录与嵌套规则过滤，忽略文件不参与评分或 AI 审查。
-- **可选 AI 审查**：在本地 `ai.local.json` 填写 Key，或通过 VS Code SecretStorage 保存；报告会注明 AI 覆盖数、截断数和失败批次。
-- **逐项可追溯**：Markdown 报告列出分类、每个文件的分数及所有问题；可导出不含完整源文件与 API 配置的 JSON 报告。问题说明可能引用短代码片段。
+- **可选 AI 审查**：预先固定 11 个文件条目和 6 个项目条目，覆盖逻辑、边界、资源、性能、架构与安全。每项给 A–E、N/A 或 U；A 为零分，B–E 按基础分乘固定权重，U 表示未完成。可在本地 `ai.local.json` 填写 Key，或通过 VS Code SecretStorage 保存；报告列出每项等级、证据与覆盖数。完整标准见 [AI_RUBRIC.md](AI_RUBRIC.md)。
+- **逐项可追溯**：Markdown 报告列出分类、文件问题数及所有问题的严重程度；可导出不含完整源文件与 API 配置的 JSON 报告。问题说明可能引用短代码片段。
 
 识别 Python、JavaScript、TypeScript、Go、Rust、Java、Kotlin、C/C++、C#、PHP、Ruby、Swift、Scala、Dart、Shell、SQL、HTML/CSS、Vue、Svelte、JSON、YAML、Terraform 等常用语言与配置代码。完整扩展名表见 `src/analysis.ts`。二进制、生成文件、依赖目录和超出大小限制的文件会跳过，并在报告中计数。
 
@@ -53,13 +53,13 @@ npm run compile
 
 也可以运行 `Shit Code Detector: 设置 AI API Key`，将 Key 存入 VS Code SecretStorage，并在设置中开启 `shitCodeDetector.ai.enabled`。存在本地配置时，它的 `enabled`、`baseUrl`、`model` 和已填写的 `apiKey` 优先；缺失字段沿用 VS Code 设置或 SecretStorage。
 
-填写本地文件后可运行 `npm run test:ai`，让 AI 分别审查好、中、差三个样本并打印分数。这是显式调用真实 API 的测试，会产生 API 请求；普通 `npm test` 不会调用网络 AI。
+填写本地文件后可运行 `npm run test:ai`，让 AI 分别审查好、中、差三个样本并打印 0–9 最终分与有效等级。这是显式调用真实 API 的测试，会产生 API 请求；普通 `npm test` 不会调用网络 AI。
 
 启用后，代码片段会发送到配置的 HTTPS API。默认最多抽取 30 个文件，每个文件最多 12,000 字符；本地规则仍扫描所有可读取的有效代码。`ai.local.json` 本身始终排除在代码扫描之外。AI 未配置或请求失败时，报告保留本地分数并说明原因。不同模型和抽样范围可能得到不同的 AI 分数。
 
 ## 评分与限制
 
-详见 [SCORING.md](SCORING.md) 和 [DESIGN.md](DESIGN.md)。总分是全部问题分数之和，不做归一化，也不设置满分。因此大项目可能天然获得更高总分；比较不同规模项目时，应同时看每个问题和文件覆盖数。规则为启发式分析，不替代语言专用 linter 或人工代码审查。
+详见 [SCORING.md](SCORING.md)、[AI_RUBRIC.md](AI_RUBRIC.md) 和 [DESIGN.md](DESIGN.md)。内部原始分按类别聚合；本地维护性提示按规模平滑，确定的正确性与安全问题及 AI 条目保持原权重；最终分经公式映射到 0–9。侧边栏另列高风险状态、问题密度、各类问题数及 Git 增量。比较不同规模项目时，应同时看这些指标与扫描覆盖数。规则为启发式分析，不替代语言专用 linter 或人工代码审查。
 
 ```bash
 npm test
