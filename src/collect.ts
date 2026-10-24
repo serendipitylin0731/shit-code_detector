@@ -4,20 +4,22 @@ import os from 'node:os';
 import path from 'node:path';
 import * as vscode from 'vscode';
 import { CodeFile, languageOf } from './analysis';
-import { isEligible, isSensitiveConfig } from './fileFilter';
-import { GitIgnoreMatcher } from './gitIgnore';
+import { ignoredDirectories, isEligible, isSensitiveConfig } from './fileFilter';
 import { listCodePaths } from './fileWalk';
+import { loadScanConfig, ScanConfig } from './scanConfig';
+
+export interface ScanEntry { uri: vscode.Uri; path: string; configured?: boolean }
 
 export interface Collection {
   files: CodeFile[];
   skipped: { unsupported: number; large: number; binary: number; unreadable: number };
 }
 
-export async function collectUris(entries: { uri: vscode.Uri; path: string }[], maxFileBytes: number, token?: vscode.CancellationToken, explicitSelection = false): Promise<Collection> {
+export async function collectUris(entries: ScanEntry[], maxFileBytes: number, token?: vscode.CancellationToken, explicitSelection = false): Promise<Collection> {
   const collection: Collection = { files: [], skipped: { unsupported: 0, large: 0, binary: 0, unreadable: 0 } };
   for (const entry of entries) {
     if (token?.isCancellationRequested) throw new vscode.CancellationError();
-    if (isSensitiveConfig(entry.path) || !(explicitSelection ? Boolean(languageOf(entry.path)) : isEligible(entry.path))) { collection.skipped.unsupported++; continue; }
+    if (isSensitiveConfig(entry.path) || !((explicitSelection || entry.configured) ? Boolean(languageOf(entry.path)) : isEligible(entry.path))) { collection.skipped.unsupported++; continue; }
     try {
       const stat = await vscode.workspace.fs.stat(entry.uri);
       if (stat.size > maxFileBytes) { collection.skipped.large++; continue; }
@@ -33,41 +35,50 @@ export async function collectUris(entries: { uri: vscode.Uri; path: string }[], 
   return collection;
 }
 
-export async function workspaceEntries(token?: vscode.CancellationToken, selectedFolder?: vscode.WorkspaceFolder): Promise<{ uri: vscode.Uri; path: string }[]> {
+export async function workspaceEntries(token?: vscode.CancellationToken, selectedFolder?: vscode.WorkspaceFolder): Promise<ScanEntry[]> {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders?.length) throw new Error('请先打开一个工作区。');
-  const include = selectedFolder ? new vscode.RelativePattern(selectedFolder, '**/*') : '**/*';
-  const uris = await vscode.workspace.findFiles(include, '**/{.git,.hg,.svn,node_modules,vendor,dist,build,out,target,.next,.nuxt,.venv,venv,__pycache__,.idea,.vscode,coverage,.terraform,Pods,bin,obj,artifacts}/**', undefined, token);
-  const matchers = new Map<string, GitIgnoreMatcher>();
-  const entries: { uri: vscode.Uri; path: string }[] = [];
-  for (const uri of uris) {
-    if (token?.isCancellationRequested) throw new vscode.CancellationError();
-    const folder = vscode.workspace.getWorkspaceFolder(uri)!;
-    let matcher = matchers.get(folder.uri.toString());
-    if (!matcher) {
-      matcher = workspaceMatcher(folder.uri);
-      matchers.set(folder.uri.toString(), matcher);
+  const entries: ScanEntry[] = [];
+  const multiRoot = folders.length > 1 && !selectedFolder;
+  for (const folder of selectedFolder ? [selectedFolder] : folders) {
+    const config = await readRootScanConfig(folder.uri);
+    const configured = config.mode !== 'all';
+    async function visit(directory: vscode.Uri, relativeDirectory: string): Promise<void> {
+      if (token?.isCancellationRequested) throw new vscode.CancellationError();
+      for (const [name, type] of await vscode.workspace.fs.readDirectory(directory)) {
+        if (token?.isCancellationRequested) throw new vscode.CancellationError();
+        if (type & vscode.FileType.SymbolicLink) continue;
+        const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
+        const uri = vscode.Uri.joinPath(directory, name);
+        if (type & vscode.FileType.Directory) {
+          if (['.git', '.hg', '.svn'].includes(name) || (!configured && ignoredDirectories.has(name)) ||
+              (config.mode === 'include' && !config.mayContain(relative)) ||
+              (config.mode === 'exclude' && !config.allows(`${relative}/`))) continue;
+          await visit(uri, relative);
+        } else if (type & vscode.FileType.File) {
+          if (!config.allows(relative)) continue;
+          const prefix = multiRoot ? `${folder.name}/` : '';
+          entries.push({ uri, path: prefix + relative, configured });
+        }
+      }
     }
-    const relative = path.posix.relative(folder.uri.path, uri.path);
-    if (await matcher.isIgnored(relative)) continue;
-    const prefix = folders.length > 1 && !selectedFolder ? `${folder.name}/` : '';
-    entries.push({ uri, path: prefix + relative });
+    await visit(folder.uri, '');
   }
   return entries;
 }
 
-export async function excludeIgnoredSelections(entries: { uri: vscode.Uri; path: string }[]): Promise<{ uri: vscode.Uri; path: string }[]> {
-  const matchers = new Map<string, GitIgnoreMatcher>();
-  const result: { uri: vscode.Uri; path: string }[] = [];
+export async function applyScanConfigToSelections(entries: ScanEntry[]): Promise<ScanEntry[]> {
+  const configs = new Map<string, ScanConfig>();
+  const result: ScanEntry[] = [];
   for (const entry of entries) {
     const folder = vscode.workspace.getWorkspaceFolder(entry.uri);
-    const root = folder?.uri ?? (entry.uri.scheme === 'file' ? vscode.Uri.file(await findLocalIgnoreRoot(entry.uri.fsPath)) : undefined);
+    const root = folder?.uri ?? (entry.uri.scheme === 'file' ? vscode.Uri.file(await findLocalScanRoot(entry.uri.fsPath)) : undefined);
     if (!root) { result.push(entry); continue; }
     const key = root.toString();
-    let matcher = matchers.get(key);
-    if (!matcher) { matcher = workspaceMatcher(root); matchers.set(key, matcher); }
+    let config = configs.get(key);
+    if (!config) { config = await readRootScanConfig(root); configs.set(key, config); }
     const relative = path.posix.relative(root.path, entry.uri.path);
-    if (!await matcher.isIgnored(relative)) result.push(entry);
+    if (config.allows(relative)) result.push({ ...entry, configured: config.mode !== 'all' });
   }
   return result;
 }
@@ -77,26 +88,34 @@ export async function directoryEntries(root: string, token?: vscode.Cancellation
   return relatives.map(relative => ({ uri: vscode.Uri.file(path.join(root, relative)), path: relative }));
 }
 
-function workspaceMatcher(root: vscode.Uri): GitIgnoreMatcher {
-  return new GitIgnoreMatcher(async directory => {
-    const uri = vscode.Uri.joinPath(root, ...(directory ? directory.split('/') : []), '.gitignore');
-    try { return new TextDecoder('utf-8', { fatal: true }).decode(await vscode.workspace.fs.readFile(uri)); }
-    catch (error) {
-      if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound') return undefined;
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      throw error;
-    }
-  });
+export async function readRootScanConfig(root: vscode.Uri): Promise<ScanConfig> {
+  let current: '.shitcode' | '.shitcode_ignore' = '.shitcode';
+  try {
+    return await loadScanConfig(async name => {
+      current = name;
+      const uri = vscode.Uri.joinPath(root, name);
+      try { return new TextDecoder('utf-8', { fatal: true }).decode(await vscode.workspace.fs.readFile(uri)); }
+      catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound') return undefined;
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      }
+    });
+  } catch (error) {
+    throw new Error(`根目录 ${current} 读取或解析失败：${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
-async function findLocalIgnoreRoot(filePath: string): Promise<string> {
+async function findLocalScanRoot(filePath: string): Promise<string> {
   let directory = path.dirname(filePath);
-  let topmostIgnore: string | undefined;
+  let topmostConfig: string | undefined;
   for (;;) {
     try { await stat(path.join(directory, '.git')); return directory; } catch { /* 继续查找 */ }
-    try { await stat(path.join(directory, '.gitignore')); topmostIgnore = directory; } catch { /* 继续查找 */ }
+    for (const name of ['.shitcode', '.shitcode_ignore']) {
+      try { await stat(path.join(directory, name)); topmostConfig = directory; } catch { /* 继续查找 */ }
+    }
     const parent = path.dirname(directory);
-    if (parent === directory) return topmostIgnore ?? path.dirname(filePath);
+    if (parent === directory) return topmostConfig ?? path.dirname(filePath);
     directory = parent;
   }
 }

@@ -9,8 +9,9 @@
 - `src/extension.ts`：注册命令、进度和取消操作、读取设置与 SecretStorage、生成报告。
 - `src/sidebar.ts` 与 `src/dashboardData.ts`：活动栏 Webview、三种目标选择、分数展示、严重程度着色与问题分页。
 - `src/localConfig.ts`：读取工作区根目录的 `ai.local.json`，校验本地 AI 设置。
-- `src/collect.ts`：工作区、显式文件和临时 Git 克隆的代码收集；识别可分析文件，过滤生成目录、二进制和超大文件。
-- `src/gitIgnore.ts` 与 `src/fileWalk.ts`：根目录及嵌套 `.gitignore` 的过滤，支持否定规则与被忽略的父目录。
+- `src/collect.ts`：工作区、显式文件和临时 Git 克隆的代码收集；工作区通过文件系统遍历，避免旧的 `.gitignore` 或编辑器搜索设置干预评分选择。
+- `src/scanConfig.ts`：根目录 `.shitcode` 允许列表和 `.shitcode_ignore` 排除列表；优先使用前者，模式语法与 `.gitignore` 一致。
+- `src/fileWalk.ts`：Git 仓库快照的有效代码遍历，不读取 `.gitignore` 作为评分排除依据。
 - `src/analysis.ts`：语言识别、通用规则、跨文件一致性与项目级架构规则。
 - `src/analyzeAsync.ts` 与 `src/analysisWorker.ts`：在工作线程执行本地分析，转发结果并响应取消。
 - `src/tsChecks.ts`、`src/python_check.py`、`src/generalChecks.ts`：按语言解析语法、运算符、注释、宏和高置信度运行异常；不执行被评分代码。
@@ -26,7 +27,7 @@
 
 ## 有效代码与覆盖
 
-按扩展名或特殊文件名识别语言；跳过常见依赖/构建目录、锁文件、生成代码、二进制和超过 `maxFileBytes` 的文件。`ai.local.json` 始终排除，避免 API Key 进入评分输入。工作区文件搜索依循 VS Code 的搜索排除设置，支持多根工作区单选或全选。三种入口均读取适用的 `.gitignore`；显式选择排除目录内的文件时仍会检查 `.gitignore`。远端仓库只接受无凭据、无查询参数的 HTTPS URL，浅克隆且不递归子模块。
+按扩展名或特殊文件名识别语言；二进制、超过 `maxFileBytes` 的文件与 `ai.local.json` 始终跳过。工作区和选定文件模式按根目录配置决定参与范围：`.shitcode` 只收录命中的文件，`.shitcode_ignore` 收录未命中的文件；两者均可用 Git ignore 格式的通配符与否定规则。配置启用时，内置的依赖/生成目录过滤不再替用户决定参与范围；未配置时仍使用内置有效代码过滤。支持多根工作区单选或全选，每个根目录单独解析。`.gitignore` 不参与评分选择。远端仓库只接受无凭据、无查询参数的 HTTPS URL，浅克隆且不递归子模块；仓库模式保持内置有效代码过滤，但也不读取 `.gitignore`。
 
 本地规则逐个分析所有收集到的代码文件。AI 只看有限样本，避免未经控制的费用和请求大小；大项目的架构判断应按报告所列证据范围理解。仓库内容是不可信输入，AI prompt 明确要求忽略其中的指令。
 

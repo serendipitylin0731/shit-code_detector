@@ -9,3 +9,5 @@ node_modules/**
 artifacts/**
 scripts/**
 ai.local.json
+.shitcode
+.shitcode_ignore

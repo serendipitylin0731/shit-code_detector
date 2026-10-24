@@ -14,7 +14,7 @@ Shit Code Detector 是一个 VS Code 插件。它先累计内部问题分，再�
 - **评分 HTTPS Git 仓库**：浅克隆到临时目录，扫描后删除临时目录；不执行仓库代码。
 - **本地静态分析**：检查运算符空格、注释格式、圈复杂度、认知复杂度、控制流嵌套、不可达代码、重复代码、循环依赖、异常处理、C/C++ 宏风险，以及 Python/JS/TS 的可确定语法与运行异常。格式分设聚合上限；文件长度、目录文件数和 `tmp` 等名称不单独判定代码质量。
 - **大项目可响应**：本地解析与评分在工作线程运行，可取消，不阻塞 VS Code 扩展主线程。
-- **遵循 `.gitignore`**：工作区、选定文件和克隆仓库均按根目录与嵌套规则过滤，忽略文件不参与评分或 AI 审查。
+- **根目录评分配置**：工作区和选定文件使用 `.shitcode` 允许列表或 `.shitcode_ignore` 排除列表；两者同时存在时只读取 `.shitcode`。路径写法、通配符、注释和 `!` 否定规则与 `.gitignore` 一致。`.gitignore` 本身不再决定文件是否参与评分。
 - **可选 AI 审查**：预先固定 11 个文件条目和 6 个项目条目，覆盖逻辑、边界、资源、性能、架构与安全。每项给 A–E、N/A 或 U；A 为零分，B–E 按基础分乘固定权重，U 表示未完成。可在本地 `ai.local.json` 填写 Key，或通过 VS Code SecretStorage 保存；报告列出每项等级、证据与覆盖数。完整标准见 [AI_RUBRIC.md](AI_RUBRIC.md)。
 - **逐项可追溯**：Markdown 报告列出分类、文件问题数及所有问题的严重程度；可导出不含完整源文件与 API 配置的 JSON 报告。问题说明可能引用短代码片段。
 
@@ -37,6 +37,32 @@ npm run compile
 4. `Shit Code Detector: 导出 JSON 报告`
 
 安装包在 [GitHub Releases](https://github.com/serendipitylin0731/shit-code_detector/releases) 发布；下载对应版本的 `.vsix`，再用 VS Code 的“从 VSIX 安装”。`npm run package` 仅供本地构建验证，产物放在被 Git 忽略的 `artifacts/` 目录。推送 `v` 开头且与 `package.json` 版本一致的标签后，GitHub Actions 会测试、打包并创建 Release。
+
+## 选择参与评分的文件
+
+在**每个工作区根目录**放置以下文件之一；多根工作区各自读取自己的配置。选定文件模式先取用户选择的文件，再应用所属根目录的配置。两个配置文件同时存在时，`.shitcode` 优先，即使它是空文件也不会回退到 `.shitcode_ignore`。
+
+- `.shitcode`：允许列表，只有命中的有效代码文件参与评分。
+- `.shitcode_ignore`：排除列表，所有有效代码文件中只有命中的文件不参与评分。本仓库根目录已提供 [`.shitcode_ignore`](.shitcode_ignore)，可直接编辑。
+
+例如，`.shitcode` 可以写成：
+
+```gitignore
+src/**/*.py
+src/**/*.ts
+!src/generated/**
+```
+
+`.shitcode_ignore` 可以写成：
+
+```gitignore
+node_modules/
+dist/
+*.generated.*
+!src/keep.generated.ts
+```
+
+每行的相对路径以对应工作区根目录为基准；空行、`#` 注释、`*`／`**` 通配符、目录末尾的 `/` 和 `!` 否定规则均沿用 `.gitignore` 语法。没有这两个文件时，工作区沿用内置的有效代码过滤。被配置选中的文件仍需是支持的代码类型、不是二进制且不超过读取大小限制；本地 `ai.local.json` 始终排除。HTTPS Git 仓库模式仍按有效代码规则扫描快照，不读取这两个配置文件。**`.gitignore` 只用于 Git 版本管理，不影响任何评分模式的文件选择。**
 
 ## AI 设置
 

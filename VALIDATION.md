@@ -18,9 +18,13 @@
 
 使用 [psf/requests](https://github.com/psf/requests) 提交 `611c6162cbc4ac2020a2f91c7cfa4f3abf9bbb60` 作本地规则回归，不调用 AI。识别 60 个代码/配置文件、47 条问题；37 个 Python 文件全部完成 AST 解析，语法失败文件 0 个。内部聚合值 **21.565**，最终 **1.219 / 9**，独立高风险状态为否。主要提示集中在复杂度、重复块和可读性；此项目在比 bad 样例大得多的情况下没有被单纯的函数数量推到高分区。
 
+## 文件选择回归
+
+在临时工作区同时放置 `.shitcode`、`.shitcode_ignore` 和 `.gitignore`，并把 `.gitignore` 排除的文件列入 `.shitcode`：工作区扫描仍纳入允许列表中的文件，包括显式列出的依赖目录代码。删除 `.shitcode` 后，`.shitcode_ignore` 的排除与 `!` 否定规则生效；选定文件模式也按同一根目录规则过滤。删除两份新配置后，旧 `.gitignore` 仍不影响评分参与范围。仓库模式的目录遍历亦不读取 `.gitignore`。
+
 ## 自动化与安装包
 
-- `npm test`：39 项测试通过，覆盖新公式、类别聚合、AI A–E/N/A/U、同条目多问题、证据校验、混合抽样、Git HEAD 增量、严重程度映射、三档梯度、`.gitignore`、复杂度、导入环与工作线程。
+- `npm test`：42 项测试通过，覆盖新公式、类别聚合、AI A–E/N/A/U、同条目多问题、证据校验、混合抽样、Git HEAD 增量、严重程度映射、三档梯度、`.shitcode`／`.shitcode_ignore` 优先级与否定规则、旧 `.gitignore` 不再影响评分、复杂度、导入环与工作线程。
 - `npm audit --audit-level=high`：0 个已报告漏洞。
 - `npm run package`：VSIX 构建通过。检查压缩包后确认不含 `ai.local.json` 或 `artifacts/`，并包含新的 `64000` 公式。
 

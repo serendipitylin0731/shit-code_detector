@@ -8,7 +8,7 @@ import { AI_BASE_POINTS, AI_CRITERIA, AI_RUBRIC_VERSION } from './aiRubric';
 import { finalScore, formattedFinalScore } from './scoreTransform';
 import { summaryMetrics } from './summaryMetrics';
 import { compareGitBaseline, GitBaseline } from './gitBaseline';
-import { cloneRepository, collectUris, directoryEntries, excludeIgnoredSelections, validateRepositoryUrl, workspaceEntries } from './collect';
+import { applyScanConfigToSelections, cloneRepository, collectUris, directoryEntries, ScanEntry, validateRepositoryUrl, workspaceEntries } from './collect';
 import { LocalAiConfig, localConfigName, readLocalAiConfig } from './localConfig';
 import { dashboardFindings, fileScores } from './dashboardData';
 import { DashboardResult, SidebarAction, SidebarProvider } from './sidebar';
@@ -36,7 +36,7 @@ export function activate(context: vscode.ExtensionContext): void {
       sidebar.setBusy(true, '正在准备评分…');
       await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Shit Code Detector 正在评分', cancellable: true }, async (progress, token) => {
         progress.report({ message: '收集代码文件' });
-        let entries: { uri: vscode.Uri; path: string }[];
+        let entries: ScanEntry[];
         let label: string;
         let selectedWorkspace: vscode.WorkspaceFolder | undefined;
         if (scope === 'workspace') {
@@ -55,8 +55,8 @@ export function activate(context: vscode.ExtensionContext): void {
           const counts = new Map<string, number>();
           for (const entry of entries) counts.set(entry.path, (counts.get(entry.path) ?? 0) + 1);
           entries = entries.map(entry => counts.get(entry.path)! > 1 ? { ...entry, path: entry.uri.fsPath.replaceAll('\\', '/') } : entry);
-          entries = await excludeIgnoredSelections(entries);
-          if (!entries.length) throw new Error('所选文件均被 .gitignore 排除。');
+          entries = await applyScanConfigToSelections(entries);
+          if (!entries.length) throw new Error('所选文件没有匹配根目录的 .shitcode，或已被 .shitcode_ignore 排除。');
           label = '选定文件';
         } else {
           const input = target?.url ?? await vscode.window.showInputBox({ prompt: '输入公开 HTTPS Git 仓库地址', placeHolder: 'https://github.com/owner/repository.git', ignoreFocusOut: true });
@@ -75,7 +75,7 @@ export function activate(context: vscode.ExtensionContext): void {
         progress.report({ message: `读取 ${entries.length} 个候选文件` });
         const collection = await collectUris(entries, maxFileBytes, token, scope === 'files');
         if (scope === 'repository') collection.files.forEach(file => { file.uri = undefined; });
-        if (!collection.files.length) throw new Error('没有找到可评分的代码文件。请检查文件类型或排除规则。');
+        if (!collection.files.length) throw new Error('没有找到可评分的代码文件。请检查 .shitcode／.shitcode_ignore、文件类型或排除规则。');
         progress.report({ message: `运行本地规则（${collection.files.length} 个文件）` });
         const projectMode = scope !== 'files';
         const analysisController = new AbortController();
