@@ -10,6 +10,7 @@ export interface DashboardResult {
   score: number;
   fileCount: number;
   skipped: string;
+  checks: string;
   ai: string;
   categoryScores: Analysis['categoryScores'];
   findings: DashboardFinding[];
@@ -113,13 +114,13 @@ function html(webview: vscode.Webview): string {
 <section class="section"><h2>评分对象</h2><select class="field" id="workspace"><option value="">当前全部工作区</option></select><button class="action" id="scanWorkspace">评分所选工作区</button><button class="action secondary" id="scanFiles">选择文件评分…</button><input class="field" id="repoUrl" type="url" placeholder="https://github.com/owner/repo.git" aria-label="Git 仓库 HTTPS 地址"><button class="action secondary" id="scanRepository">评分 Git 仓库</button></section>
 <section class="section"><h2>AI 分析</h2><div class="row"><button class="action secondary" id="openAiConfig">打开本地配置</button><button class="action secondary" id="setApiKey">安全保存 Key</button></div><div class="hint">本地配置：工作区根目录 ai.local.json</div></section>
 <div class="status" id="status" role="status"></div>
-<section class="section" id="results" hidden><div class="chips" id="categories"></div><div class="list-head"><h2 id="findingTitle">具体问题</h2><button class="open" id="openReport">打开完整报告</button></div><select class="field" id="categoryFilter" aria-label="筛选类别"><option value="all">全部类别</option><option value="architecture">架构</option><option value="style">风格</option><option value="naming">命名</option><option value="readability">可读性</option><option value="consistency">一致性</option></select><div class="hint" id="coverage"></div><div id="findingList"></div><div class="pager"><button id="previous">上一页</button><span id="pageLabel"></span><button id="next">下一页</button></div></section>
+<section class="section" id="results" hidden><div class="chips" id="categories"></div><div class="list-head"><h2 id="findingTitle">具体问题</h2><button class="open" id="openReport">打开完整报告</button></div><select class="field" id="categoryFilter" aria-label="筛选类别"><option value="all">全部类别</option><option value="architecture">架构</option><option value="style">风格</option><option value="naming">命名</option><option value="readability">可读性</option><option value="consistency">一致性</option><option value="correctness">正确性</option></select><div class="hint" id="coverage"></div><div id="findingList"></div><div class="pager"><button id="previous">上一页</button><span id="pageLabel"></span><button id="next">下一页</button></div></section>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const $ = id => document.getElementById(id);
   let current = null, page = 0, busy = false;
   const pageSize = 100;
-  const categoryNames = { architecture: '架构', style: '风格', naming: '命名', readability: '可读性', consistency: '一致性' };
+  const categoryNames = { architecture: '架构', style: '风格', naming: '命名', readability: '可读性', consistency: '一致性', correctness: '正确性' };
   const severityNames = { low: '轻微', medium: '一般', high: '较重', critical: '严重' };
   function send(action, extras) { vscode.postMessage(Object.assign({ action }, extras || {})); }
   $('scanWorkspace').onclick = () => send('scanWorkspace', { workspace: $('workspace').value || undefined });
@@ -170,7 +171,7 @@ function html(webview: vscode.Webview): string {
       $('score').textContent = current.score;
       $('summary').textContent = current.label + ' · ' + current.fileCount + ' 个文件';
       $('results').hidden = false;
-      $('coverage').textContent = '跳过：' + current.skipped + ' · AI：' + current.ai;
+      $('coverage').textContent = '跳过：' + current.skipped + ' · 解析：' + current.checks + ' · AI：' + current.ai;
       const chips = $('categories'); chips.replaceChildren();
       for (const [key, value] of Object.entries(current.categoryScores)) chips.append(make('span', 'chip', (categoryNames[key] || key) + ' ' + value));
       if (changed) { page = 0; renderFindings(); }

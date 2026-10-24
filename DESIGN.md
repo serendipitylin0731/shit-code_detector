@@ -10,16 +10,20 @@
 - `src/sidebar.ts` 与 `src/dashboardData.ts`：活动栏 Webview、三种目标选择、分数展示、严重程度着色与问题分页。
 - `src/localConfig.ts`：读取工作区根目录的 `ai.local.json`，校验本地 AI 设置。
 - `src/collect.ts`：工作区、显式文件和临时 Git 克隆的代码收集；识别可分析文件，过滤生成目录、二进制和超大文件。
-- `src/analysis.ts`：语言识别、确定性规则、跨文件一致性与项目级架构规则。
+- `src/gitIgnore.ts` 与 `src/fileWalk.ts`：根目录及嵌套 `.gitignore` 的过滤，支持否定规则与被忽略的父目录。
+- `src/analysis.ts`：语言识别、通用规则、跨文件一致性与项目级架构规则。
+- `src/tsChecks.ts`、`src/python_check.py`、`src/generalChecks.ts`：按语言解析语法、运算符、注释、宏和高置信度运行异常；不执行被评分代码。
 - `src/ai.ts`：OpenAI 兼容 Chat Completions 调用、明确的评分 prompt、JSON 验证、去重和失败隔离。
 
 流程：在左侧侧边栏选择目标 → 收集代码 → 本地评分 → 可选 AI 审查 → 合并去重 → 在侧边栏展示总分和逐条问题。用户可从界面打开完整 Markdown 报告。Git 克隆目录在操作结束时清理。
 
 ## 有效代码与覆盖
 
-按扩展名或特殊文件名识别语言；跳过常见依赖/构建目录、锁文件、生成代码、二进制和超过 `maxFileBytes` 的文件。`ai.local.json` 始终排除，避免 API Key 进入评分输入。工作区文件搜索依循 VS Code 的搜索排除设置，支持多根工作区单选或全选。选择文件入口允许显式选择排除目录内的代码文件。远端仓库只接受无凭据、无查询参数的 HTTPS URL，浅克隆且不递归子模块。
+按扩展名或特殊文件名识别语言；跳过常见依赖/构建目录、锁文件、生成代码、二进制和超过 `maxFileBytes` 的文件。`ai.local.json` 始终排除，避免 API Key 进入评分输入。工作区文件搜索依循 VS Code 的搜索排除设置，支持多根工作区单选或全选。三种入口均读取适用的 `.gitignore`；显式选择排除目录内的文件时仍会检查 `.gitignore`。远端仓库只接受无凭据、无查询参数的 HTTPS URL，浅克隆且不递归子模块。
 
 本地规则逐个分析所有收集到的代码文件。AI 只看有限样本，避免未经控制的费用和请求大小；大项目的架构判断应按报告所列证据范围理解。仓库内容是不可信输入，AI prompt 明确要求忽略其中的指令。
+
+JS/TS 解析器随 VSIX 打包；Python 规则通过受隔离的标准库 AST/tokenizer 子进程解析，缺少 Python 时记录覆盖不足。运行异常规则只识别直接可确定的字面量情况，不执行目标项目，也不代替测试或类型检查。
 
 ## 失败处理
 

@@ -2,13 +2,21 @@
   "name": "shit-code-detector",
   "displayName": "Shit Code Detector",
   "description": "对多语言代码库进行可解释、分数无上限的质量分析",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "serendipitylin0731",
   "author": "_serendipity",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/serendipitylin0731/shit-code_detector.git" },
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Linters", "Other"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/serendipitylin0731/shit-code_detector.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
   "main": "./dist/src/extension.js",
   "activationEvents": [
     "onView:shitCodeDetector.dashboard",
@@ -21,35 +29,87 @@
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        { "id": "shitCodeDetector", "title": "Shit Code Detector", "icon": "media/sidebar.svg" }
+        {
+          "id": "shitCodeDetector",
+          "title": "Shit Code Detector",
+          "icon": "media/sidebar.svg"
+        }
       ]
     },
     "views": {
       "shitCodeDetector": [
-        { "id": "shitCodeDetector.dashboard", "name": "代码评分", "type": "webview" }
+        {
+          "id": "shitCodeDetector.dashboard",
+          "name": "代码评分",
+          "type": "webview"
+        }
       ]
     },
     "commands": [
-      { "command": "shitCodeDetector.scanWorkspace", "title": "Shit Code Detector: 评分当前工作区" },
-      { "command": "shitCodeDetector.scanFiles", "title": "Shit Code Detector: 选择文件评分" },
-      { "command": "shitCodeDetector.scanRepository", "title": "Shit Code Detector: 评分 HTTPS Git 仓库" },
-      { "command": "shitCodeDetector.setApiKey", "title": "Shit Code Detector: 设置 AI API Key" },
-      { "command": "shitCodeDetector.openAiConfig", "title": "Shit Code Detector: 打开本地 AI 配置" }
+      {
+        "command": "shitCodeDetector.scanWorkspace",
+        "title": "Shit Code Detector: 评分当前工作区"
+      },
+      {
+        "command": "shitCodeDetector.scanFiles",
+        "title": "Shit Code Detector: 选择文件评分"
+      },
+      {
+        "command": "shitCodeDetector.scanRepository",
+        "title": "Shit Code Detector: 评分 HTTPS Git 仓库"
+      },
+      {
+        "command": "shitCodeDetector.setApiKey",
+        "title": "Shit Code Detector: 设置 AI API Key"
+      },
+      {
+        "command": "shitCodeDetector.openAiConfig",
+        "title": "Shit Code Detector: 打开本地 AI 配置"
+      }
     ],
     "configuration": {
       "title": "Shit Code Detector",
       "properties": {
-        "shitCodeDetector.ai.enabled": { "type": "boolean", "default": false, "description": "启用 AI 分析。API Key 可写入本地 ai.local.json，或通过命令保存到 SecretStorage。" },
-        "shitCodeDetector.ai.baseUrl": { "type": "string", "default": "https://api.deepseek.com", "description": "OpenAI 兼容聊天 API 的 HTTPS 根地址。" },
-        "shitCodeDetector.ai.model": { "type": "string", "default": "deepseek-v4-flash", "description": "AI 模型名称。" },
-        "shitCodeDetector.ai.maxFiles": { "type": "integer", "default": 30, "minimum": 1, "maximum": 200, "description": "送入 AI 的最多文件数；本地规则仍扫描全部有效代码。" },
-        "shitCodeDetector.ai.maxCharsPerFile": { "type": "integer", "default": 12000, "minimum": 1000, "maximum": 50000, "description": "单个文件送入 AI 的最多字符数。" },
-        "shitCodeDetector.maxFileBytes": { "type": "integer", "default": 524288, "minimum": 1024, "description": "单个代码文件的最大读取字节数。超过时跳过并计数。" }
+        "shitCodeDetector.ai.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用 AI 分析。API Key 可写入本地 ai.local.json，或通过命令保存到 SecretStorage。"
+        },
+        "shitCodeDetector.ai.baseUrl": {
+          "type": "string",
+          "default": "https://api.deepseek.com",
+          "description": "OpenAI 兼容聊天 API 的 HTTPS 根地址。"
+        },
+        "shitCodeDetector.ai.model": {
+          "type": "string",
+          "default": "deepseek-v4-flash",
+          "description": "AI 模型名称。"
+        },
+        "shitCodeDetector.ai.maxFiles": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 200,
+          "description": "送入 AI 的最多文件数；本地规则仍扫描全部有效代码。"
+        },
+        "shitCodeDetector.ai.maxCharsPerFile": {
+          "type": "integer",
+          "default": 12000,
+          "minimum": 1000,
+          "maximum": 50000,
+          "description": "单个文件送入 AI 的最多字符数。"
+        },
+        "shitCodeDetector.maxFileBytes": {
+          "type": "integer",
+          "default": 524288,
+          "minimum": 1024,
+          "description": "单个代码文件的最大读取字节数。超过时跳过并计数。"
+        }
       }
     }
   },
   "scripts": {
-    "compile": "tsc -p .",
+    "compile": "tsc -p . && node scripts/copy-parser.js",
     "test": "npm run compile && node --test dist/test/*.test.js",
     "test:ai": "npm run compile && node scripts/test-ai.js",
     "fixtures": "npm run compile && node scripts/create-fixtures.js",
@@ -63,5 +123,8 @@
   },
   "overrides": {
     "@azure/msal-node": "^7.1.1"
+  },
+  "dependencies": {
+    "ignore": "^7.0.14"
   }
 }

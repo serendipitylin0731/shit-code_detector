@@ -20,7 +20,7 @@ test('按问题逐条累加且总分没有上限', () => {
 });
 
 test('架构规则只在项目模式运行，跨文件缩进不一致可定位', () => {
-  const long = Array.from({ length: 451 }, () => 'pass').join('\n');
+  const long = Array.from({ length: 851 }, () => 'pass').join('\n');
   const tabs = '\tfoo\n\tbar\n\tbaz\n\tqux';
   const spaces = '    foo\n    bar\n    baz\n    qux';
   const files = [file('long.py', long), file('a.py', tabs), file('b.py', spaces)];

@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import * as vscode from 'vscode';
 import { CodeFile, languageOf } from './analysis';
-import { ignoredDirectories, isEligible, isSensitiveConfig } from './fileFilter';
+import { isEligible, isSensitiveConfig } from './fileFilter';
+import { GitIgnoreMatcher } from './gitIgnore';
+import { listCodePaths } from './fileWalk';
 
 export interface Collection {
   files: CodeFile[];
@@ -36,29 +38,67 @@ export async function workspaceEntries(token?: vscode.CancellationToken, selecte
   if (!folders?.length) throw new Error('请先打开一个工作区。');
   const include = selectedFolder ? new vscode.RelativePattern(selectedFolder, '**/*') : '**/*';
   const uris = await vscode.workspace.findFiles(include, '**/{.git,.hg,.svn,node_modules,vendor,dist,build,out,target,.next,.nuxt,.venv,venv,__pycache__,.idea,.vscode,coverage,.terraform,Pods,bin,obj,artifacts}/**', undefined, token);
-  return uris.map(uri => {
+  const matchers = new Map<string, GitIgnoreMatcher>();
+  const entries: { uri: vscode.Uri; path: string }[] = [];
+  for (const uri of uris) {
+    if (token?.isCancellationRequested) throw new vscode.CancellationError();
     const folder = vscode.workspace.getWorkspaceFolder(uri)!;
+    let matcher = matchers.get(folder.uri.toString());
+    if (!matcher) {
+      matcher = workspaceMatcher(folder.uri);
+      matchers.set(folder.uri.toString(), matcher);
+    }
+    const relative = path.posix.relative(folder.uri.path, uri.path);
+    if (await matcher.isIgnored(relative)) continue;
     const prefix = folders.length > 1 && !selectedFolder ? `${folder.name}/` : '';
-    return { uri, path: prefix + path.posix.relative(folder.uri.path, uri.path) };
-  });
+    entries.push({ uri, path: prefix + relative });
+  }
+  return entries;
+}
+
+export async function excludeIgnoredSelections(entries: { uri: vscode.Uri; path: string }[]): Promise<{ uri: vscode.Uri; path: string }[]> {
+  const matchers = new Map<string, GitIgnoreMatcher>();
+  const result: { uri: vscode.Uri; path: string }[] = [];
+  for (const entry of entries) {
+    const folder = vscode.workspace.getWorkspaceFolder(entry.uri);
+    const root = folder?.uri ?? (entry.uri.scheme === 'file' ? vscode.Uri.file(await findLocalIgnoreRoot(entry.uri.fsPath)) : undefined);
+    if (!root) { result.push(entry); continue; }
+    const key = root.toString();
+    let matcher = matchers.get(key);
+    if (!matcher) { matcher = workspaceMatcher(root); matchers.set(key, matcher); }
+    const relative = path.posix.relative(root.path, entry.uri.path);
+    if (!await matcher.isIgnored(relative)) result.push(entry);
+  }
+  return result;
 }
 
 export async function directoryEntries(root: string, token?: vscode.CancellationToken): Promise<{ uri: vscode.Uri; path: string }[]> {
-  const entries: { uri: vscode.Uri; path: string }[] = [];
-  async function visit(directory: string): Promise<void> {
-    if (token?.isCancellationRequested) throw new vscode.CancellationError();
-    for (const item of await readdir(directory, { withFileTypes: true })) {
-      if (item.isDirectory()) {
-        if (!ignoredDirectories.has(item.name)) await visit(path.join(directory, item.name));
-      } else if (item.isFile()) {
-        const absolute = path.join(directory, item.name);
-        const relative = path.relative(root, absolute).replaceAll('\\', '/');
-        if (isEligible(relative)) entries.push({ uri: vscode.Uri.file(absolute), path: relative });
-      }
+  const relatives = await listCodePaths(root, () => { if (token?.isCancellationRequested) throw new vscode.CancellationError(); });
+  return relatives.map(relative => ({ uri: vscode.Uri.file(path.join(root, relative)), path: relative }));
+}
+
+function workspaceMatcher(root: vscode.Uri): GitIgnoreMatcher {
+  return new GitIgnoreMatcher(async directory => {
+    const uri = vscode.Uri.joinPath(root, ...(directory ? directory.split('/') : []), '.gitignore');
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(await vscode.workspace.fs.readFile(uri)); }
+    catch (error) {
+      if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound') return undefined;
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
     }
+  });
+}
+
+async function findLocalIgnoreRoot(filePath: string): Promise<string> {
+  let directory = path.dirname(filePath);
+  let topmostIgnore: string | undefined;
+  for (;;) {
+    try { await stat(path.join(directory, '.git')); return directory; } catch { /* 继续查找 */ }
+    try { await stat(path.join(directory, '.gitignore')); topmostIgnore = directory; } catch { /* 继续查找 */ }
+    const parent = path.dirname(directory);
+    if (parent === directory) return topmostIgnore ?? path.dirname(filePath);
+    directory = parent;
   }
-  await visit(root);
-  return entries;
 }
 
 export function validateRepositoryUrl(input: string): string {

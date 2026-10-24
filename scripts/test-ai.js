@@ -1,5 +1,5 @@
 const path = require('node:path');
-const { analyze } = require('../dist/src/analysis.js');
+const { analyze, mergeAnalysis } = require('../dist/src/analysis.js');
 const { analyzeWithAi } = require('../dist/src/ai.js');
 const { readLocalAiConfig } = require('../dist/src/localConfig.js');
 const { qualityCases } = require('../dist/test/fixtures/quality.js');
@@ -20,7 +20,7 @@ async function main() {
       maxFiles: 30,
       maxCharsPerFile: 12000
     });
-    const total = analyze(item.files, ai.findings);
+    const total = mergeAnalysis(local, ai.findings);
     console.log(`${item.name}: 本地 ${local.score} + AI ${total.score - local.score} = ${total.score}；AI 问题 ${ai.findings.length} 条，审核文件 ${ai.reviewedFiles}/${item.files.length}`);
     for (const finding of ai.findings) console.log(`  +${finding.points} ${finding.category} ${finding.path}${finding.line ? `:${finding.line}` : ''} ${finding.message}`);
     for (const error of ai.errors) console.log(`  AI 未完成：${error}`);

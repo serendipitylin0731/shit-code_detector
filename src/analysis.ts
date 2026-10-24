@@ -1,6 +1,9 @@
 import path from 'node:path';
+import { inspectGeneral } from './generalChecks';
+import { inspectPython } from './pythonChecks';
+import { inspectTypeScript } from './tsChecks';
 
-export type Category = 'style' | 'naming' | 'readability' | 'consistency' | 'architecture';
+export type Category = 'style' | 'naming' | 'readability' | 'consistency' | 'architecture' | 'correctness';
 
 export interface CodeFile {
   path: string;
@@ -24,6 +27,7 @@ export interface Analysis {
   findings: Finding[];
   score: number;
   categoryScores: Record<Category, number>;
+  checkCoverage: string;
 }
 
 const languageByExtension: Record<string, string> = {
@@ -59,6 +63,8 @@ export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = 
 
   const indentByLanguage = new Map<string, { tabs: CodeFile[]; spaces: CodeFile[] }>();
   const sourceByDirectory = new Map<string, number>();
+  let jsTsChecked = 0;
+  let jsonChecked = 0;
   for (const file of files) {
     const lines = file.content.split(/\r?\n/);
     const directory = path.posix.dirname(file.path.replaceAll('\\', '/'));
@@ -75,9 +81,20 @@ export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = 
     const lf = (file.content.match(/(?<!\r)\n/g) ?? []).length;
     const crlf = (file.content.match(/\r\n/g) ?? []).length;
     if (lf > 0 && crlf > 0) add(file.path, undefined, 'consistency', 'mixed-eol', 2, '同一文件混用了 LF 和 CRLF 换行符');
-    if (projectMode && !isTestFile(file.path) && lines.length > 400) {
-      const points = Math.ceil((lines.length - 400) / 100) * 2;
+    if (projectMode && !isTestFile(file.path) && lines.length > 800) {
+      const points = Math.ceil((lines.length - 800) / 200) * 2;
       add(file.path, undefined, 'architecture', 'large-file', points, `${lines.length} 行代码集中在一个文件中，建议检查职责划分`);
+    }
+
+    findings.push(...inspectGeneral(file));
+    if (file.language === 'TypeScript' || file.language === 'JavaScript') {
+      findings.push(...inspectTypeScript(file));
+      jsTsChecked++;
+    }
+    if (file.language === 'JSON' && !/(?:^|\/)(?:tsconfig|jsconfig|settings|launch|tasks)\b/i.test(file.path)) {
+      jsonChecked++;
+      try { JSON.parse(file.content); }
+      catch { add(file.path, undefined, 'correctness', 'syntax-error', 5, 'JSON 语法无效，按严格 JSON 读取时会失败'); }
     }
 
     let blankRun = 0;
@@ -86,15 +103,14 @@ export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = 
       const number = index + 1;
       if (/\s+$/.test(line) && line.trim().length > 0) add(file.path, number, 'style', 'trailing-space', 1, '行尾存在多余空白');
       const indent = line.match(/^[ \t]*/)?.[0] ?? '';
-      if (indent.includes(' ') && indent.includes('\t')) {
+      if (file.language !== 'Makefile' && indent.includes(' ') && indent.includes('\t')) {
         add(file.path, number, 'style', 'mixed-indent', 2, '同一行缩进混用 Tab 与空格');
       }
       if (line.length > 120 && !/^\s*(?:\/\/|#|\*|<!--)/.test(line)) add(file.path, number, 'readability', 'long-line', 1, `代码行长 ${line.length} 字符，超过 120`);
       blankRun = line.trim() ? 0 : blankRun + 1;
-      if (blankRun === 3) add(file.path, number, 'style', 'blank-run', 1, '连续空行超过 2 行');
-      if (blankRun > 3) add(file.path, number, 'style', 'blank-run', 1, '额外的连续空行');
-      if (supportsNameCheck(file.language)) {
-        const declaration = line.match(/\b(?:const|let|var|def|function|class|fn|func|val|auto|int|string|String)\s+(foo|bar|baz|tmp|temp|thing|stuff|data|obj|xxx)\b/i);
+      if (blankRun >= 5) add(file.path, number, 'style', 'blank-run', 1, '连续空行超过 4 行');
+      if (!isTestFile(file.path) && supportsNameCheck(file.language)) {
+        const declaration = line.match(/\b(?:const|let|var|def|function|class|fn|func|val|auto|int|string|String)\s+(foo|bar|baz|tmp|temp|thing|stuff|xxx)\b/i);
         if (declaration) add(file.path, number, 'naming', 'vague-name', 2, `声明名“${declaration[1]}”缺乏具体含义`);
       }
     }
@@ -107,14 +123,26 @@ export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = 
   }
   if (projectMode && files.length >= 8) {
     for (const [directory, count] of sourceByDirectory) {
-      if (count > 20 && !isTestFile(`${directory}/ordinary.ts`)) add(directory, undefined, 'architecture', 'crowded-directory', Math.ceil((count - 20) / 10) * 2, `同一目录放置 ${count} 个代码文件，建议检查模块边界`);
+      if (count > 30 && !isTestFile(`${directory}/ordinary.ts`)) add(directory, undefined, 'architecture', 'crowded-directory', Math.ceil((count - 30) / 15) * 2, `同一目录放置 ${count} 个代码文件，建议检查模块边界`);
     }
   }
 
-  const merged = [...findings, ...extra];
-  const categoryScores: Record<Category, number> = { style: 0, naming: 0, readability: 0, consistency: 0, architecture: 0 };
+  const pythonFiles = files.filter(file => file.language === 'Python');
+  const python = inspectPython(pythonFiles);
+  findings.push(...python.findings);
+  const checkCoverage = `JS/TS AST ${jsTsChecked} 个、Python AST ${python.checked}/${pythonFiles.length} 个、严格 JSON ${jsonChecked} 个${python.note ? `；${python.note}` : ''}`;
+
+  return finalize(files, [...findings, ...extra], checkCoverage);
+}
+
+export function mergeAnalysis(base: Analysis, extra: Finding[]): Analysis {
+  return finalize(base.files, [...base.findings, ...extra], base.checkCoverage);
+}
+
+function finalize(files: CodeFile[], merged: Finding[], checkCoverage: string): Analysis {
+  const categoryScores: Record<Category, number> = { style: 0, naming: 0, readability: 0, consistency: 0, architecture: 0, correctness: 0 };
   for (const finding of merged) categoryScores[finding.category] += finding.points;
-  return { files, findings: merged, score: merged.reduce((sum, finding) => sum + finding.points, 0), categoryScores };
+  return { files, findings: merged, score: merged.reduce((sum, finding) => sum + finding.points, 0), categoryScores, checkCoverage };
 }
 
 function supportsNameCheck(language: string): boolean {

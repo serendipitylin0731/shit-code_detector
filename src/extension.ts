@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
 import path from 'node:path';
 import { writeFile } from 'node:fs/promises';
-import { analyze, CodeFile, Finding } from './analysis';
+import { analyze, CodeFile, Finding, mergeAnalysis } from './analysis';
 import { AiResult, analyzeWithAi } from './ai';
-import { cloneRepository, collectUris, directoryEntries, validateRepositoryUrl, workspaceEntries } from './collect';
+import { cloneRepository, collectUris, directoryEntries, excludeIgnoredSelections, validateRepositoryUrl, workspaceEntries } from './collect';
 import { LocalAiConfig, localConfigName, readLocalAiConfig } from './localConfig';
 import { dashboardFindings } from './dashboardData';
 import { DashboardResult, SidebarAction, SidebarProvider } from './sidebar';
@@ -49,6 +49,8 @@ export function activate(context: vscode.ExtensionContext): void {
           const counts = new Map<string, number>();
           for (const entry of entries) counts.set(entry.path, (counts.get(entry.path) ?? 0) + 1);
           entries = entries.map(entry => counts.get(entry.path)! > 1 ? { ...entry, path: entry.uri.fsPath.replaceAll('\\', '/') } : entry);
+          entries = await excludeIgnoredSelections(entries);
+          if (!entries.length) throw new Error('所选文件均被 .gitignore 排除。');
           label = '选定文件';
         } else {
           const input = target?.url ?? await vscode.window.showInputBox({ prompt: '输入公开 HTTPS Git 仓库地址', placeHolder: 'https://github.com/owner/repository.git', ignoreFocusOut: true });
@@ -96,16 +98,17 @@ export function activate(context: vscode.ExtensionContext): void {
                 maxCharsPerFile: config.get<number>('ai.maxCharsPerFile', 12000)
               }, projectMode, controller.signal);
             } finally { subscription.dispose(); }
-            result = analyze(collection.files, ai.findings, projectMode);
+            result = mergeAnalysis(result, ai.findings);
           }
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
-        const report = makeReport(label, scope, result.score, result.categoryScores, result.findings, collection.files, collection.skipped, aiEnabled, ai);
+        const report = makeReport(label, scope, result.score, result.categoryScores, result.findings, collection.files, collection.skipped, result.checkCoverage, aiEnabled, ai);
         latestReport = report;
         latestFiles = collection.files;
         const dashboard: DashboardResult = {
           id: ++reportId, label, scope, score: result.score, fileCount: collection.files.length,
           skipped: `不支持 ${collection.skipped.unsupported} / 超大 ${collection.skipped.large} / 二进制 ${collection.skipped.binary} / 读取失败 ${collection.skipped.unreadable}`,
+          checks: result.checkCoverage,
           ai: !aiEnabled ? '未启用' : `${ai?.reviewedFiles ?? 0}/${collection.files.length} 个文件，${ai?.errors.length ?? 0} 个失败项`,
           categoryScores: result.categoryScores,
           findings: dashboardFindings(result.findings, collection.files)
@@ -200,7 +203,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void { /* 无持久进程 */ }
 
-function makeReport(label: string, scope: Scope, score: number, categoryScores: Record<string, number>, findings: Finding[], files: CodeFile[], skipped: Record<string, number>, aiEnabled: boolean, ai?: AiResult): string {
+function makeReport(label: string, scope: Scope, score: number, categoryScores: Record<string, number>, findings: Finding[], files: CodeFile[], skipped: Record<string, number>, checkCoverage: string, aiEnabled: boolean, ai?: AiResult): string {
   const clean = (value: string): string => value.replaceAll('|', '\\|').replaceAll('\n', ' ').replaceAll('`', 'ˋ');
   const lines = [
     '# Shit Code Detector 评分报告', '',
@@ -209,10 +212,11 @@ function makeReport(label: string, scope: Scope, score: number, categoryScores: 
     `- 总分：**${score}**（越高越 shit，无上限）`,
     `- 已分析：${files.length} 个代码文件`,
     `- 跳过：不支持或生成文件 ${skipped.unsupported}，超大文件 ${skipped.large}，二进制 ${skipped.binary}，读取失败 ${skipped.unreadable}`,
+    `- 静态解析：${checkCoverage}`,
     `- AI：${!aiEnabled ? '未启用' : `${ai?.reviewedFiles ?? 0}/${files.length} 个文件完成语义审查；截断片段 ${ai?.truncatedFiles ?? 0} 个`}`,
     '', '## 分类分数', '',
-    '| 架构 | 风格 | 命名 | 可读性 | 一致性 |', '| ---: | ---: | ---: | ---: | ---: |',
-    `| ${categoryScores.architecture} | ${categoryScores.style} | ${categoryScores.naming} | ${categoryScores.readability} | ${categoryScores.consistency} |`,
+    '| 架构 | 风格 | 命名 | 可读性 | 一致性 | 正确性 |', '| ---: | ---: | ---: | ---: | ---: | ---: |',
+    `| ${categoryScores.architecture} | ${categoryScores.style} | ${categoryScores.naming} | ${categoryScores.readability} | ${categoryScores.consistency} | ${categoryScores.correctness} |`,
     '', '## 具体问题', ''
   ];
   if (!findings.length) lines.push('没有发现符合当前规则的问题。');
