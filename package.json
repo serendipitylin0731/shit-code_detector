@@ -1,0 +1,52 @@
+{
+  "name": "shit-code-detector",
+  "displayName": "Shit Code Detector",
+  "description": "对多语言代码库进行可解释、分数无上限的质量分析",
+  "version": "0.1.0",
+  "publisher": "serendipitylin0731",
+  "author": "_serendipity",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/serendipitylin0731/shit-code_detector.git" },
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Linters", "Other"],
+  "main": "./dist/src/extension.js",
+  "activationEvents": [
+    "onCommand:shitCodeDetector.scanWorkspace",
+    "onCommand:shitCodeDetector.scanFiles",
+    "onCommand:shitCodeDetector.scanRepository",
+    "onCommand:shitCodeDetector.setApiKey"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "shitCodeDetector.scanWorkspace", "title": "Shit Code Detector: 评分当前工作区" },
+      { "command": "shitCodeDetector.scanFiles", "title": "Shit Code Detector: 选择文件评分" },
+      { "command": "shitCodeDetector.scanRepository", "title": "Shit Code Detector: 评分 HTTPS Git 仓库" },
+      { "command": "shitCodeDetector.setApiKey", "title": "Shit Code Detector: 设置 AI API Key" }
+    ],
+    "configuration": {
+      "title": "Shit Code Detector",
+      "properties": {
+        "shitCodeDetector.ai.enabled": { "type": "boolean", "default": false, "description": "启用 AI 分析。需要先通过命令安全保存 API Key。" },
+        "shitCodeDetector.ai.baseUrl": { "type": "string", "default": "https://api.deepseek.com", "description": "OpenAI 兼容聊天 API 的 HTTPS 根地址。" },
+        "shitCodeDetector.ai.model": { "type": "string", "default": "deepseek-v4-flash", "description": "AI 模型名称。" },
+        "shitCodeDetector.ai.maxFiles": { "type": "integer", "default": 30, "minimum": 1, "maximum": 200, "description": "送入 AI 的最多文件数；本地规则仍扫描全部有效代码。" },
+        "shitCodeDetector.ai.maxCharsPerFile": { "type": "integer", "default": 12000, "minimum": 1000, "maximum": 50000, "description": "单个文件送入 AI 的最多字符数。" },
+        "shitCodeDetector.maxFileBytes": { "type": "integer", "default": 524288, "minimum": 1024, "description": "单个代码文件的最大读取字节数。超过时跳过并计数。" }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "test": "npm run compile && node --test dist/test/*.test.js",
+    "package": "npm run compile && node scripts/package.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.0.0"
+  },
+  "overrides": {
+    "@azure/msal-node": "^7.1.1"
+  }
+}
