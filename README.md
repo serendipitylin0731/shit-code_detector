@@ -32,7 +32,7 @@ npm run compile
 2. `Shit Code Detector: 选择文件评分`
 3. `Shit Code Detector: 评分 HTTPS Git 仓库`
 
-发布安装包可运行 `npm run package`，安装包会放在 `artifacts/` 目录，再用 VS Code 的“从 VSIX 安装”。
+安装包在 [GitHub Releases](https://github.com/serendipitylin0731/shit-code_detector/releases) 发布；下载对应版本的 `.vsix`，再用 VS Code 的“从 VSIX 安装”。`npm run package` 仅供本地构建验证，产物放在被 Git 忽略的 `artifacts/` 目录。推送 `v` 开头且与 `package.json` 版本一致的标签后，GitHub Actions 会测试、打包并创建 Release。
 
 ## AI 设置
 

@@ -23,7 +23,7 @@
 ## 构建验证
 
 - `npm test`：覆盖分级样本、规则累加、语言识别、AI 响应、本地配置解析和界面严重程度映射。
-- `npm run package`：生成 `artifacts/shit-code-detector-0.2.0.vsix`。
+- `npm run package`：本地生成 `artifacts/shit-code-detector-0.2.0.vsix`；公开安装包由 GitHub Release 提供。
 - `npm audit`：依赖审计。
 
 VS Code 图形界面的手动点击验证仍需在扩展开发宿主中运行；自动测试覆盖其数据映射与命令后端的评分核心。

@@ -1,8 +1,6 @@
 node_modules/
 dist/
 *.vsix
-/artifacts/*.vsix
-/artifacts/quality-fixtures/
-/artifacts/quality-fixtures.code-workspace
+/artifacts/
 /ai.local.json
 .DS_Store
