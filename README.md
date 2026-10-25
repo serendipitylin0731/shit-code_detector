@@ -17,7 +17,8 @@ Shit Code Detector 是一个 VS Code 插件。它先累计内部问题分，再�
 - **本地静态分析**：检查运算符空格、注释格式、圈复杂度、认知复杂度、控制流嵌套、不可达代码、重复代码、循环依赖、异常处理、C/C++ 宏风险，以及 Python/JS/TS 的可确定语法与运行异常。格式分设聚合上限；文件长度、目录文件数和 `tmp` 等名称不单独判定代码质量。
 - **大项目可响应**：本地解析与评分在工作线程运行，可取消，不阻塞 VS Code 扩展主线程。
 - **根目录评分配置**：当前项目和单文件使用 `.shitcode` 允许列表或 `.shitcode_ignore` 排除列表；两者同时存在时只读取 `.shitcode`。路径写法、通配符、注释和 `!` 否定规则与 `.gitignore` 一致。`.gitignore` 本身不再决定文件是否参与评分。
-- **可选 AI 审查**：预先固定 11 个文件条目和 6 个项目条目，覆盖逻辑、边界、资源、性能、架构与安全。每项给 A–E、N/A 或 U；A 为零分，B–E 按基础分乘固定权重，U 表示未完成。Key 保存在 VS Code SecretStorage，保存后每次评分自动调用 AI；报告列出每项等级、证据与覆盖数。完整标准见 [AI_RUBRIC.md](AI_RUBRIC.md)。
+- **可选 AI 审查**：预先固定 8 个文件条目和 6 个项目条目，覆盖可见边界、资源、失败处理、性能、架构与安全；不猜测未知业务逻辑的正确性。每项给 A–E、N/A 或 U；A 为零分，B–E 按基础分乘固定权重，U 表示未完成。Key 保存在 VS Code SecretStorage，保存后每次评分自动调用 AI；报告列出每项等级、证据与覆盖数。完整标准见 [AI_RUBRIC.md](AI_RUBRIC.md)。
+- **手动 void**：对有分数的 AI 分项或具体问题点击“void”，条目立即置灰并移动到所在列表底部，综合分、问题密度、报告和 JSON 同步更新；可点击“恢复计分”撤销。本次评分的 void 状态在重新评分时重置。
 - **逐项可追溯**：Markdown 报告列出分类、文件问题数及所有问题的严重程度；可导出不含完整源文件与 API 配置的 JSON 报告。问题说明可能引用短代码片段。
 
 识别 Python、JavaScript、TypeScript、Go、Rust、Java、Kotlin、C/C++、C#、PHP、Ruby、Swift、Scala、Dart、Shell、SQL、HTML/CSS、Vue、Svelte、JSON、YAML、Terraform 等常用语言与配置代码。完整扩展名表见 `src/analysis.ts`。二进制、生成文件、依赖目录和超出大小限制的文件会跳过，并在报告中计数。
@@ -83,7 +84,7 @@ AI 对收集到的所有有效代码逐片送审。请求分片大小仅控制�
 
 文件级 AI 请求最多同时进行两次；项目级审查也将全部代码分批送审，依据真实代码判断架构；跨批关系证据不足时给 U。报告分别显示收到 AI 响应的文件与字符数、全部条目完成分级的文件数，以及失败项。大项目会产生较多 API 请求、耗时与费用；请求失败或用户取消后不会把未审查代码记成 A。不同模型可能得到不同的 AI 分数。
 
-从 v0.8.0 起，旧的 `ai.maxFiles`、`ai.maxCharsPerFile` 和 `ai.maxTotalChars` 设置不再生效；如需调整单次请求大小，请使用 `ai.maxCharsPerRequest`。v0.8.1 修复了 HTTPS 代理环境中的 AI 请求，并让项目级审查也接收全部代码。
+从 v0.8.0 起，旧的 `ai.maxFiles`、`ai.maxCharsPerFile` 和 `ai.maxTotalChars` 设置不再生效；如需调整单次请求大小，请使用 `ai.maxCharsPerRequest`。v0.8.1 修复了 HTTPS 代理环境中的 AI 请求，并让项目级审查也接收全部代码。v0.9.0 收紧 AI 判断依据，并加入本轮评分结果的手动 void。
 
 ## 评分与限制
 

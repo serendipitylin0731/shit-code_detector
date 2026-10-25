@@ -27,6 +27,8 @@ test('侧边栏只显示当前目标的操作入口，Webview 脚本可解析', 
   assert.match(webview.html, /id="repositoryControls" hidden/);
   assert.match(webview.html, /id="settingsPanel" hidden/);
   assert.match(webview.html, /id="settingsToggle"/);
+  assert.match(webview.html, /send\('toggleVoid', \{ key: item\.voidKey \}\)/);
+  assert.match(webview.html, /\.grade-row\.voided, \.finding\.voided/);
   assert.match(webview.html, /extension\/media\/logo.svg/);
   assert.doesNotMatch(webview.html, /id="workspace"|id="openAiConfig"|选择文件评分|根目录和选定文件使用/);
   const script = webview.html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)?.[1];

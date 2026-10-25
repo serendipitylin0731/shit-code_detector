@@ -10,6 +10,7 @@ export interface DashboardResult {
   scope: string;
   score: number;
   scoreDisplay: string;
+  voidedCount: number;
   density: string;
   highRisk: boolean;
   baseline?: string;
@@ -17,7 +18,7 @@ export interface DashboardResult {
   skipped: string;
   checks: string;
   ai: string;
-  aiAssessments: Omit<AiAssessment, 'basePoints' | 'weight' | 'points'>[];
+  aiAssessments: (Omit<AiAssessment, 'basePoints' | 'weight' | 'points'> & { voidKey: string; voided: boolean; voidable: boolean })[];
   categoryCounts: Record<keyof Analysis['categoryScores'], number>;
   fileScores: Pick<FileScore, 'path' | 'findings'>[];
   findings: DashboardFinding[];
@@ -33,7 +34,8 @@ export type SidebarAction =
   | { action: 'openSettings' }
   | { action: 'openFinding'; index: number }
   | { action: 'openReport' }
-  | { action: 'exportJson' };
+  | { action: 'exportJson' }
+  | { action: 'toggleVoid'; key: string };
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   static readonly viewId = 'shitCodeDetector.dashboardRight';
@@ -135,6 +137,9 @@ function html(webview: vscode.Webview, logoUrl: string): string {
   .grade-row.A { border-color: #4f9f70; } .grade-row.B { border-color: #a5b944; }
   .grade-row.C { border-color: #d6a338; } .grade-row.D { border-color: #e4773e; } .grade-row.E { border-color: #d94b54; }
   .grade-row.U, .grade-row.N\\/A { border-color: var(--vscode-descriptionForeground); }
+  .grade-row.voided, .finding.voided { opacity: .48; filter: grayscale(1); border-color: var(--vscode-descriptionForeground); }
+  .void-button { margin-top: 7px; padding: 3px 7px; border: 1px solid var(--vscode-panel-border); border-radius: 5px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); font-size: 10px; }
+  .void-button:hover { background: var(--vscode-button-secondaryHoverBackground); }
   .grade-score { font-weight: 700; font-variant-numeric: tabular-nums; }
   details summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
   .list-head { display: flex; align-items: baseline; justify-content: space-between; }
@@ -208,14 +213,15 @@ function html(webview: vscode.Webview, logoUrl: string): string {
     const items = current.findings.filter(item => (filter === 'all' || item.category === filter) && (file === 'all' || item.path === file));
     const pages = Math.max(1, Math.ceil(items.length / pageSize));
     page = Math.min(page, pages - 1);
-    $('findingTitle').textContent = '具体问题 · ' + items.length;
+    $('findingTitle').textContent = '具体问题 · ' + items.filter(item => !item.voided).length + ' 条生效';
     const list = $('findingList'); list.replaceChildren();
     if (!items.length) list.append(make('p', 'hint', '没有符合筛选条件的问题。'));
     for (const item of items.slice(page * pageSize, (page + 1) * pageSize)) {
-      const card = make('article', 'finding ' + item.severity);
+      const card = make('article', 'finding ' + item.severity + (item.voided ? ' voided' : ''));
       const top = make('div', 'finding-top');
       top.append(make('span', '', categoryNames[item.category] || item.category), make('span', 'severity', severityNames[item.severity]));
       card.append(top, make('div', 'location', item.path + (item.line ? ':' + item.line : '') + ' · ' + (item.evidenceType === 'ai-inference' ? 'AI 推断' : '静态规则匹配') + ' · 置信度 ' + ({ high: '高', medium: '中', low: '低' }[item.confidence] || '中')), make('div', 'reason', item.message));
+      if (item.voidable) { const toggle = make('button', 'void-button', item.voided ? '恢复计分' : 'void 此判断'); toggle.onclick = () => send('toggleVoid', { key: item.voidKey }); card.append(toggle); }
       if (item.openable) { const open = make('button', 'open', '打开文件位置 →'); open.onclick = () => send('openFinding', { index: item.index }); card.append(open); }
       list.append(card);
     }
@@ -238,7 +244,7 @@ function html(webview: vscode.Webview, logoUrl: string): string {
       current = state.result;
       $('score').textContent = current.scoreDisplay;
       $('score').dataset.tone = current.score < 3 ? 'good' : current.score < 6 ? 'watch' : 'bad';
-      $('summary').textContent = current.label + ' · ' + current.fileCount + ' 个文件 · 问题密度 ' + current.density;
+      $('summary').textContent = current.label + ' · ' + current.fileCount + ' 个文件 · 问题密度 ' + current.density + (current.voidedCount ? ' · 已 void ' + current.voidedCount + ' 项' : '');
       $('risk').textContent = current.highRisk ? '⚠ 已发现静态确认的高风险正确性或安全问题' : '';
       $('results').hidden = false;
       $('coverage').textContent = '跳过：' + current.skipped + ' · 解析：' + current.checks + ' · AI：' + current.ai;
@@ -259,15 +265,16 @@ function html(webview: vscode.Webview, logoUrl: string): string {
           ranking.append(button);
         }
         if (!ranking.childNodes.length) ranking.append(make('p', 'hint', '没有发现可计分的文件问题。'));
-        const assessments = current.aiAssessments || [];
+        const assessments = [...(current.aiAssessments || [])].sort((a, b) => Number(a.voided) - Number(b.voided));
         $('aiGradeTitle').textContent = 'AI 分项等级 · ' + assessments.length + ' 项';
         const gradeList = $('aiAssessmentList'); gradeList.replaceChildren();
         if (!assessments.length) gradeList.append(make('p', 'hint', '未启用 AI，或没有通过校验的分项评分。'));
         for (const item of assessments) {
-          const row = make('article', 'grade-row ' + item.grade);
+          const row = make('article', 'grade-row ' + item.grade + (item.voided ? ' voided' : ''));
           row.append(make('div', 'grade-score', item.grade + (item.adjustedFrom ? '（原建议 ' + item.adjustedFrom + '，校验后）' : '') + ' · ' + item.title + ' · ' + gradeSeverity[item.grade]),
             make('div', 'location', item.path + (item.line ? ':' + item.line : '')),
             make('div', 'reason', item.reason));
+          if (item.voidable) { const toggle = make('button', 'void-button', item.voided ? '恢复计分' : 'void 此条目'); toggle.onclick = () => send('toggleVoid', { key: item.voidKey }); row.append(toggle); }
           gradeList.append(row);
         }
         page = 0; renderFindings();

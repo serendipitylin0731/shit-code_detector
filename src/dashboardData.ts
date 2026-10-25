@@ -1,4 +1,5 @@
 import { CodeFile, Finding } from './analysis';
+import { findingVoidKey } from './voidScore';
 
 export interface DashboardFinding {
   index: number;
@@ -11,6 +12,9 @@ export interface DashboardFinding {
   message: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
   openable: boolean;
+  voidKey: string;
+  voided: boolean;
+  voidable: boolean;
 }
 
 export interface FileScore { path: string; score: number; findings: number }
@@ -24,11 +28,16 @@ export function fileScores(findings: Finding[], files: CodeFile[]): FileScore[] 
   return [...scores.values()].sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
 }
 
-export function dashboardFindings(findings: Finding[], files: CodeFile[]): DashboardFinding[] {
+export function dashboardFindings(findings: Finding[], files: CodeFile[], voided: ReadonlySet<string> = new Set(),
+  validKeys?: ReadonlySet<string>): DashboardFinding[] {
   const available = new Set(files.filter(file => file.uri).map(file => file.path));
-  return [...findings]
-    .sort((a, b) => b.points - a.points || a.path.localeCompare(b.path) || (a.line ?? 0) - (b.line ?? 0))
-    .map((finding, index) => ({
+  const keys = findings.map(findingVoidKey);
+  const positive = validKeys ?? new Set(keys.filter((_, index) => findings[index].points > 0));
+  return findings.map((finding, sourceIndex) => ({ finding, key: keys[sourceIndex] }))
+    .sort((a, b) => Number(voided.has(a.key)) - Number(voided.has(b.key)) ||
+      b.finding.points - a.finding.points || a.finding.path.localeCompare(b.finding.path) ||
+      (a.finding.line ?? 0) - (b.finding.line ?? 0))
+    .map(({ finding, key }, index) => ({
       index,
       path: finding.path,
       line: finding.line,
@@ -39,6 +48,9 @@ export function dashboardFindings(findings: Finding[], files: CodeFile[]): Dashb
       message: finding.message,
       severity: finding.aiGrade ? ({ B: 'low', C: 'medium', D: 'high', E: 'critical' } as const)[finding.aiGrade]
         : finding.points >= 6 ? 'critical' : finding.points >= 4 ? 'high' : finding.points >= 2 ? 'medium' : 'low',
-      openable: available.has(finding.path)
+      openable: available.has(finding.path),
+      voidKey: key,
+      voided: voided.has(key),
+      voidable: positive.has(key)
     }));
 }

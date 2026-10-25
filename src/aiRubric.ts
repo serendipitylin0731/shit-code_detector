@@ -13,20 +13,15 @@ export interface AiCriterion {
   anchors: Record<AiGrade, string>;
 }
 
-export const AI_RUBRIC_VERSION = '2.0';
+export const AI_RUBRIC_VERSION = '3.0';
 export const AI_BASE_POINTS: Readonly<Record<AiGrade, number>> = Object.freeze({ A: 0, B: 2, C: 4, D: 6, E: 10 });
 
 /** This is the only source for AI criteria, weights and grade anchors. */
 export const AI_CRITERIA: readonly AiCriterion[] = Object.freeze([
   {
-    id: 'logic_correctness', title: '逻辑正确性', scope: 'file', category: 'correctness', weight: 3,
-    focus: '检查可见输入与控制流下的错误结果、不可达代码和不变量破坏；必须给出可复现路径，不得假设未知业务契约。',
-    anchors: { A: '可见逻辑未发现违反契约的路径。', B: '次要分支有局部偏差且影响有限。', C: '一个可复现输入导致重要结果错误。', D: '多个重要路径产生错误结果。', E: '核心行为在常见输入下系统性错误。' }
-  },
-  {
     id: 'boundary_safety', title: '边界与输入安全', scope: 'file', category: 'correctness', weight: 3,
-    focus: '检查空值、越界、非法输入与边界值处理；仅在调用契约或可见代码证明输入可达时扣分。',
-    anchors: { A: '可见边界条件得到处理或有明确前置条件。', B: '次要边界提示不清但失败可控。', C: '一个可达边界输入导致错误或异常。', D: '多个关键边界未处理。', E: '常见边界输入使核心流程失效或破坏数据。' }
+    focus: '只判断可见输入路径是否发生未被预期的失败或数据破坏；空值可作为合法结果或异常信号，主动抛错和由调用方处理也可合理。没有业务契约时不得仅因缺少空值检查或出现异常扣分。',
+    anchors: { A: '可见边界的结果或失败方式合理，包含约定的空值与异常。', B: '次要边界失败方式略不一致，但不会伪装成功。', C: '已证明可达的边界输入造成一处未预期失败或错误状态。', D: '多个关键边界产生未预期失败且未正确传递。', E: '常见边界导致核心流程失控或数据破坏，并有明确可达证据。' }
   },
   {
     id: 'resource_lifecycle', title: '资源与状态生命周期', scope: 'file', category: 'correctness', weight: 3,
@@ -39,24 +34,14 @@ export const AI_CRITERIA: readonly AiCriterion[] = Object.freeze([
     anchors: { A: '名称准确，能从上下文理解职责。', B: '少量名称略泛，但上下文可辨认。', C: '一个重要名称误导理解或需反复追踪。', D: '多个关键名称模糊或与行为不符。', E: '核心接口或数据名称系统性误导，难以安全修改。' }
   },
   {
-    id: 'readability_flow', title: '表达与流程可读性', scope: 'file', category: 'readability', weight: 1,
-    focus: '读者能否顺着数据与控制流理解意图；不重复行长、空格等机械格式问题。',
-    anchors: { A: '流程清晰，关键转换可直接理解。', B: '局部表达绕弯，阅读稍有停顿。', C: '一处重要流程需要反复推断。', D: '多处流程或数据转换难以追踪。', E: '主要逻辑难以复核，修改时极易误解。' }
-  },
-  {
     id: 'function_cohesion', title: '函数职责内聚', scope: 'file', category: 'architecture', weight: 2,
     focus: '函数是否把互不相关的职责混在一起；不能仅凭函数长度判定。',
     anchors: { A: '函数职责集中，边界清楚。', B: '少量辅助步骤混入，但主职责明确。', C: '一个函数混合两个可分离的职责。', D: '关键函数混合多项职责且产生明显耦合。', E: '核心逻辑成为难以拆分和测试的职责汇集点。' }
   },
   {
-    id: 'documentation_contract', title: '文档与契约', scope: 'file', category: 'readability', weight: 1,
-    focus: '检查非显然 API 前置条件、返回值、数据不变量和设计约束是否说明；清晰代码无需额外注释。',
-    anchors: { A: '需要说明的约束有解释，普通代码无需额外注释。', B: '一处注释略显冗余或遗漏次要背景。', C: '重要约束缺说明，或一处注释与代码不符。', D: '多处关键意图缺失或注释误导维护。', E: '核心行为依赖隐含约束且现有注释系统性误导。' }
-  },
-  {
     id: 'error_strategy', title: '异常与失败处理', scope: 'file', category: 'correctness', weight: 2,
-    focus: '失败是否被正确传播、恢复或记录；不重复本地已发现的空 catch/except。',
-    anchors: { A: '可见失败路径有明确处理或传播。', B: '次要失败路径的上下文稍不足。', C: '一处重要失败可能被误处理或丢失上下文。', D: '多个重要失败路径处理不一致或误导调用方。', E: '核心失败路径系统性被掩盖或错误恢复。' }
+    focus: '失败只需被正确传递、显式返回、记录或恢复，不要求当前函数捕获异常，也不要求知道最终如何恢复。只有可见的吞错、伪装成功、错误恢复或状态破坏才扣分；不重复本地空 catch/except。',
+    anchors: { A: '可见失败被正确传递、返回、记录或恢复。', B: '次要失败路径的信号略含糊，但调用方仍可识别。', C: '一处重要失败被误报为成功或丢失必要错误信息。', D: '多个重要失败路径吞错、错误恢复或误导调用方。', E: '核心失败被系统性掩盖，导致持续错误状态。' }
   },
   {
     id: 'semantic_duplication', title: '语义重复与抽象', scope: 'file', category: 'duplication', weight: 2,

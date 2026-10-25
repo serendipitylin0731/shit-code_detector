@@ -22,7 +22,7 @@ test('高风险状态与每千行密度独立于最终数值', () => {
 
 test('本地类别系数不改变 AI 固定条目的基础分乘权重', () => {
   const local = analyze([code('src/main.ts', 'export const value=1;')], [], false);
-  const merged = mergeAnalysis(local, [{ path: 'src/main.ts', line: 1, category: 'correctness', rule: 'ai-logic_correctness',
+  const merged = mergeAnalysis(local, [{ path: 'src/main.ts', line: 1, category: 'correctness', rule: 'ai-boundary_safety',
     points: 30, message: '可见逻辑错误', source: 'ai', aiGrade: 'E' }]);
   assert.equal(merged.score - local.score, 30);
 });

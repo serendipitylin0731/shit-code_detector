@@ -1,4 +1,4 @@
-import { LOCAL_CATEGORY_POLICY, type Analysis, type Category } from './analysis';
+import { type Analysis, type Category } from './analysis';
 
 export interface SummaryMetrics {
   effectiveLines: number;
@@ -11,16 +11,17 @@ export interface SummaryMetrics {
 export function summaryMetrics(analysis: Analysis, uncertainAssessments = 0): SummaryMetrics {
   const effectiveLines = analysis.files.reduce((total, file) => total + file.content.split(/\r?\n/)
     .filter(line => line.trim() && !/^\s*(?:#|\/\/|\*|<!--)/.test(line)).length, 0);
-  const local = new Map<Category, number>();
-  let aiTotal = 0;
+  const ai = new Map<Category, number>();
   for (const finding of analysis.findings) {
-    if (finding.source === 'ai') aiTotal += finding.points;
-    else local.set(finding.category, (local.get(finding.category) ?? 0) + finding.points);
+    if (finding.source === 'ai') ai.set(finding.category, (ai.get(finding.category) ?? 0) + finding.points);
   }
-  const weightedWithoutSizeScale = aiTotal + [...local].reduce((sum, [category, points]) => {
-    const policy = LOCAL_CATEGORY_POLICY[category];
-    return sum + Math.min(points, policy.cap) * policy.multiplier;
-  }, 0);
+  const heuristicScale = Math.min(1, Math.sqrt(1000 / Math.max(effectiveLines, 1)));
+  const weightedWithoutSizeScale = (Object.entries(analysis.categoryScores) as [Category, number][])
+    .reduce((sum, [category, points]) => {
+      const aiPoints = ai.get(category) ?? 0;
+      const scale = ['architecture', 'correctness', 'security'].includes(category) ? 1 : heuristicScale;
+      return sum + aiPoints + (points - aiPoints) / scale;
+    }, 0);
   const counts = new Map<string, number>();
   const languageByPath = new Map(analysis.files.map(file => [file.path, file.language]));
   const failedPaths = new Set(analysis.findings.filter(finding => finding.rule === 'syntax-error').map(finding => finding.path));
