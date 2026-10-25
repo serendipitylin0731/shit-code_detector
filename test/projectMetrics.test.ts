@@ -32,12 +32,14 @@ ${Array.from({ length: 11 }, (_, index) => `    if a > ${index}: a += ${index}`)
   assert.ok(nested.findings.some(item => item.rule === 'control-nesting' || item.rule === 'cognitive-complexity'));
 });
 
-test('重复块跨文件查找，导入环仅在项目模式计分', () => {
+test('实质性重复块至少三处才计分，导入环仅在项目模式计分', () => {
   const block = ['const apple = calculatePrice(orders, tax);', 'const banana = normalizeItem(apple, locale);',
     'const cherry = serializeItem(banana, options);', 'const delta = sendRequest(cherry, client);',
     'const echo = parseResponse(delta, decoder);', 'const result = validateOutput(echo, schema);'].join('\n');
   const files = [file('src/a.ts', `import { b } from './b';\n${block}\nexport const a = b;`),
     file('src/b.ts', `import { a } from './a';\n${block}\nexport const b = a;`)];
+  assert.equal(analyze(files).findings.filter(item => item.rule === 'duplicate-block').length, 0);
+  files.push(file('src/c.ts', block));
   const project = analyze(files);
   assert.equal(project.findings.filter(item => item.rule === 'duplicate-block').length, 1);
   assert.equal(project.findings.filter(item => item.rule === 'import-cycle').length, 1);
@@ -57,6 +59,8 @@ test('短片段和测试文件不产生重复块误报', () => {
   const repeated = 'const result = true;\nreturn result;';
   const result = analyze([file('src/a.ts', repeated), file('src/b.ts', repeated), file('test/a.test.ts', repeated)]);
   assert.ok(!result.findings.some(item => item.rule === 'duplicate-block'));
+  const calls = 'check();\n'.repeat(12);
+  assert.ok(!analyze([file('src/a.ts', calls)]).findings.some(item => item.rule === 'duplicate-block'));
 });
 
 test('Python 导入环忽略 TYPE_CHECKING 与包入口转发', () => {

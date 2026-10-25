@@ -10,11 +10,10 @@ const blockSize = 6;
 /** Find only exact, substantial blocks. Fuzzy signatures produce too many false positives. */
 export function inspectDuplication(files: CodeFile[]): Finding[] {
   const findings: Finding[] = [];
-  const firstSeen = new Map<string, { path: string; line: number }>();
+  const occurrences = new Map<string, { path: string; line: number }[]>();
   for (const file of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
     if (!duplicateLanguages.has(file.language) || isTestPath(file.path)) continue;
     const lines = file.content.split(/\r?\n/).map(line => line.trim().replace(/\s+/g, ' '));
-    let lastReportedEnd = -1;
     for (let index = 0; index + blockSize <= lines.length; index++) {
       const block = lines.slice(index, index + blockSize);
       if (block.some(line => !line || /^(?:#|\/\/|\/\*|\*|import\b|from\b|using\b|#include\b)/.test(line))) continue;
@@ -22,13 +21,21 @@ export function inspectDuplication(files: CodeFile[]): Finding[] {
       const executable = block.filter(line => /\b(?:if|for|while|return|raise|throw|await|const|let|var)\b|(?<![=!<>])=(?!=)|\b\w+\s*\(/.test(line));
       if (executable.length < 4) continue;
       const signature = `${file.language}\0${block.join('\n')}`;
-      const original = firstSeen.get(signature);
-      if (!original) { firstSeen.set(signature, { path: file.path, line: index + 1 }); continue; }
-      if (original.path === file.path && index + 1 - original.line < blockSize) continue;
-      if (index <= lastReportedEnd) continue;
-      findings.push({ path: file.path, line: index + 1, category: 'duplication', rule: 'duplicate-block', points: 4,
-        message: `连续 ${blockSize} 行与 ${original.path}:${original.line} 重复，建议提取共同逻辑`, source: 'rules' });
-      lastReportedEnd = index + blockSize - 1;
+      const seen = occurrences.get(signature) ?? [];
+      const previous = seen.at(-1);
+      if (previous?.path === file.path && index + 1 - previous.line < blockSize) continue;
+      seen.push({ path: file.path, line: index + 1 });
+      occurrences.set(signature, seen);
+    }
+  }
+  const reportedUntil = new Map<string, number>();
+  for (const seen of occurrences.values()) {
+    if (seen.length < 3) continue;
+    for (const occurrence of seen.slice(2)) {
+      if (occurrence.line <= (reportedUntil.get(occurrence.path) ?? 0)) continue;
+      findings.push({ path: occurrence.path, line: occurrence.line, category: 'duplication', rule: 'duplicate-block', points: 4,
+        message: `连续 ${blockSize} 行在至少三处相同（最早见 ${seen[0].path}:${seen[0].line}）；请检查是否属于不必要的复制`, source: 'rules' });
+      reportedUntil.set(occurrence.path, occurrence.line + blockSize - 1);
     }
   }
   return findings;

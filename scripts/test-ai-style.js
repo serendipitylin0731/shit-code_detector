@@ -29,6 +29,18 @@ const samples = [
     processB();
   }
 }` },
+  { path: 'interfaceForwarder.ts', language: 'TypeScript', content: `export interface SearchService {
+  search(query: string): Promise<string[]>;
+}
+export function search(service: SearchService, query: string): Promise<string[]> {
+  return service.search(query);
+}` },
+  { path: 'unifiedForwarder.ts', language: 'TypeScript', content: `export class Api {
+  constructor(private readonly client: Client) {}
+  get(id: string) { return this.client.get(id); }
+  save(value: Value) { return this.client.save(value); }
+  remove(id: string) { return this.client.remove(id); }
+}` },
   { path: 'overAbstracted.ts', language: 'TypeScript', content: `function userName(user: User): string { return user.name; }
 function upper(value: string): string { return value.toUpperCase(); }
 function upperUserName(user: User): string { return upper(userName(user)); }
@@ -51,6 +63,8 @@ async function main() {
     'main.cpp': ['control_flow_clarity', 'abstraction_fit'],
     'status.ts': ['function_cohesion', 'abstraction_fit', 'local_comprehensibility'],
     'branches.ts': ['semantic_duplication', 'abstraction_fit'],
+    'interfaceForwarder.ts': ['abstraction_fit', 'expression_simplicity', 'local_comprehensibility'],
+    'unifiedForwarder.ts': ['semantic_duplication', 'abstraction_fit', 'expression_simplicity', 'local_comprehensibility'],
     'overAbstracted.ts': ['abstraction_fit', 'local_comprehensibility']
   };
   for (const [file, ids] of Object.entries(watch)) {
@@ -59,7 +73,9 @@ async function main() {
       const item = ai.assessments.find(entry => entry.path === file && entry.criterion === id);
       console.log(`  ${id}: ${item?.grade ?? 'MISSING'} ${item?.reason ?? ''}`);
       if (!item) process.exitCode = 1;
-      if (file !== 'overAbstracted.ts' && ['C', 'D', 'E'].includes(item?.grade)) process.exitCode = 1;
+      const protectedCase = ['interfaceForwarder.ts', 'unifiedForwarder.ts'].includes(file) || (file === 'branches.ts' && id === 'semantic_duplication');
+      if (protectedCase && ['B', 'C', 'D', 'E'].includes(item?.grade)) process.exitCode = 1;
+      else if (file !== 'overAbstracted.ts' && ['C', 'D', 'E'].includes(item?.grade)) process.exitCode = 1;
     }
   }
   const bad = ai.assessments.filter(item => item.path === 'overAbstracted.ts' &&

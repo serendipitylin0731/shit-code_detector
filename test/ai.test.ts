@@ -52,6 +52,66 @@ test('清晰长分支、局部重复和同一目的的多个步骤不被机械�
   } finally { globalThis.fetch = original; }
 });
 
+test('接口封装与统一转发不能按多余包装或跳转计分', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const assessments = cleanFile('api.ts');
+    for (const [criterion, reason] of [
+      ['abstraction_fit', '第 1 行 forward 是公共接口封装，仅转发 client.invoke，多出一层抽象。'],
+      ['expression_simplicity', '第 1 行 forward 只是统一转发入口，包装一次调用显得多余。'],
+      ['local_comprehensibility', '第 1 行 forward 作为接口需要跳转到实现，因此局部不够清楚。']
+    ]) {
+      assessments[assessments.findIndex(item => item.criterion === criterion)] =
+        { path: 'api.ts', criterion, grade: 'C', line: 1, reason } as typeof assessments[number];
+    }
+    return mockResponse(assessments);
+  };
+  try {
+    const code = 'export function forward(client: Client, value: string) {\n  return client.invoke(value);\n}';
+    const result = await analyzeWithAi(analyze([{ path: 'api.ts', language: 'TypeScript', content: code }], [], false), options, false);
+    for (const id of ['abstraction_fit', 'expression_simplicity', 'local_comprehensibility']) {
+      assert.equal(result.assessments.find(item => item.criterion === id)?.grade, 'U');
+    }
+    assert.equal(result.findings.length, 0);
+  } finally { globalThis.fetch = original; }
+});
+
+test('提到公共入口时仍可识别无职责的多层私有调用链', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const assessments = cleanFile('chain.ts');
+    assessments[assessments.findIndex(item => item.criterion === 'abstraction_fit')] = {
+      path: 'chain.ts', criterion: 'abstraction_fit', grade: 'C', line: 4,
+      reason: '第 4 行公共入口后接三层无职责的私有辅助函数，读者须在这些函数间跳转才能看懂简单的名称转换。'
+    } as typeof assessments[number];
+    return mockResponse(assessments);
+  };
+  try {
+    const code = 'function name(user: User) { return user.name; }\nfunction upper(value: string) { return value.toUpperCase(); }\nfunction upperName(user: User) { return upper(name(user)); }\nexport function display(user: User) { return upperName(user); }';
+    const result = await analyzeWithAi(analyze([{ path: 'chain.ts', language: 'TypeScript', content: code }], [], false), options, false);
+    assert.equal(result.assessments.find(item => item.criterion === 'abstraction_fit')?.grade, 'C');
+  } finally { globalThis.fetch = original; }
+});
+
+test('三次单行调用仍属于小重复，不计入 AI 分', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const assessments = cleanFile('calls.py');
+    assessments[assessments.findIndex(item => item.criterion === 'semantic_duplication')] = {
+      path: 'calls.py', criterion: 'semantic_duplication', grade: 'C', line: 2,
+      reason: '第 2、8、14 行三处重复调用 check()，修改时需要同步。',
+      issues: [2, 8, 14].map(line => ({ line, reason: `第 ${line} 行重复调用 check()，需要同步维护。` }))
+    } as typeof assessments[number];
+    return mockResponse(assessments);
+  };
+  try {
+    const lines = Array.from({ length: 20 }, (_, index) => [1, 7, 13].includes(index) ? 'check()' : `value_${index} = ${index}`);
+    const result = await analyzeWithAi(analyze([source('calls.py', lines.join('\n'))], [], false), options, false);
+    assert.equal(result.assessments.find(item => item.criterion === 'semantic_duplication')?.grade, 'U');
+    assert.equal(result.findings.length, 0);
+  } finally { globalThis.fetch = original; }
+});
+
 test('约定的空值或正常抛错不能凭缺少本地恢复流程扣分', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => {
@@ -157,17 +217,21 @@ test('同一 AI 条目的独立问题逐条显示，但权重只计算一次', a
   globalThis.fetch = async () => {
     const assessments = cleanFile('sample.py');
     assessments[assessments.findIndex(item => item.criterion === 'semantic_duplication')] = { path: 'sample.py', criterion: 'semantic_duplication', grade: 'D', line: 1,
-      reason: '第 1 行与第 2 行保留两份相同转换逻辑，修改时必须同步。',
-      issues: [{ line: 1, reason: '第 1 行复制了同一转换步骤，需要同步维护。' },
-        { line: 2, reason: '第 2 行又实现相同转换，修改时存在分叉风险。' }] } as typeof assessments[number];
+      reason: '第 1、7、13 行三处反复实现相同的六步转换逻辑，统一处理能减轻维护负担。',
+      issues: [{ line: 1, reason: '第 1 行开始第一组六步转换，需要同步维护。' },
+        { line: 7, reason: '第 7 行开始第二组六步转换，修改时存在分叉风险。' },
+        { line: 13, reason: '第 13 行开始第三组六步转换，修改时存在分叉风险。' }] } as typeof assessments[number];
     return mockResponse(assessments);
   };
   try {
-    const base = analyze([source('sample.py', 'def run(x):\n    return x')], [], false);
+    const block = (prefix: string) => [`${prefix}1 = load_${prefix}()`, `${prefix}2 = normalize(${prefix}1)`,
+      `${prefix}3 = validate(${prefix}2)`, `${prefix}4 = render(${prefix}3)`, `${prefix}5 = publish(${prefix}4)`,
+      `${prefix}6 = record(${prefix}5)`].join('\n');
+    const base = analyze([source('sample.py', [block('a'), block('b'), block('c')].join('\n'))], [], false);
     const result = await analyzeWithAi(base, options, false);
-    assert.equal(result.findings.length, 2);
+    assert.equal(result.findings.length, 3);
     assert.equal(result.findings.reduce((sum, item) => sum + item.points, 0), 6);
-    assert.deepEqual(result.findings.map(item => item.aiGrade), ['D', 'D']);
+    assert.deepEqual(result.findings.map(item => item.aiGrade), ['D', 'D', 'D']);
   } finally { globalThis.fetch = original; }
 });
 
@@ -269,17 +333,17 @@ test('同一文件跨片段缺陷只计最严重的一次，问题明细仍保�
     const part = input[0].part as number;
     const line = Number(String(input[0].code).match(/^(\d+)/)?.[1]);
     const assessments = cleanFile('large.py');
-    assessments[assessments.findIndex(item => item.criterion === 'semantic_duplication')] = { path: 'large.py', criterion: 'semantic_duplication', grade: part === 1 ? 'B' : 'D', line,
-      reason: `第 ${line} 行重复了相同的赋值步骤，修改时需要在多处同步。` } as typeof assessments[number];
+    assessments[assessments.findIndex(item => item.criterion === 'semantic_naming')] = { path: 'large.py', criterion: 'semantic_naming', grade: part === 1 ? 'B' : 'D', line,
+      reason: `第 ${line} 行关键名称含糊，读者需要反复确认该值的职责。` } as typeof assessments[number];
     return mockResponse(assessments);
   };
   try {
     const file = source('large.py', 'value = 1\n'.repeat(110));
     const result = await analyzeWithAi(analyze([file], [], false), { ...options, maxCharsPerRequest: 500 }, false);
     assert.equal(result.reviewedFiles, 1);
-    assert.equal(result.assessments.find(item => item.criterion === 'semantic_duplication')?.grade, 'D');
-    assert.equal(result.findings.filter(item => item.rule === 'ai-semantic_duplication').length, result.fileRequests);
-    assert.equal(result.findings.filter(item => item.rule === 'ai-semantic_duplication').reduce((sum, item) => sum + item.points, 0), 6);
+    assert.equal(result.assessments.find(item => item.criterion === 'semantic_naming')?.grade, 'D');
+    assert.equal(result.findings.filter(item => item.rule === 'ai-semantic_naming').length, result.fileRequests);
+    assert.equal(result.findings.filter(item => item.rule === 'ai-semantic_naming').reduce((sum, item) => sum + item.points, 0), 6);
   } finally { globalThis.fetch = original; }
 });
 
