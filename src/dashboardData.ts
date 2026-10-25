@@ -15,6 +15,7 @@ export interface DashboardFinding {
   voidKey: string;
   voided: boolean;
   voidable: boolean;
+  fileVoided: boolean;
 }
 
 export interface FileScore { path: string; score: number; findings: number }
@@ -29,12 +30,12 @@ export function fileScores(findings: Finding[], files: CodeFile[]): FileScore[] 
 }
 
 export function dashboardFindings(findings: Finding[], files: CodeFile[], voided: ReadonlySet<string> = new Set(),
-  validKeys?: ReadonlySet<string>): DashboardFinding[] {
+  validKeys?: ReadonlySet<string>, voidedFiles: ReadonlySet<string> = new Set()): DashboardFinding[] {
   const available = new Set(files.filter(file => file.uri).map(file => file.path));
   const keys = findings.map(findingVoidKey);
   const positive = validKeys ?? new Set(keys.filter((_, index) => findings[index].points > 0));
   return findings.map((finding, sourceIndex) => ({ finding, key: keys[sourceIndex] }))
-    .sort((a, b) => Number(voided.has(a.key)) - Number(voided.has(b.key)) ||
+    .sort((a, b) => Number(voided.has(a.key) || voidedFiles.has(a.finding.path)) - Number(voided.has(b.key) || voidedFiles.has(b.finding.path)) ||
       b.finding.points - a.finding.points || a.finding.path.localeCompare(b.finding.path) ||
       (a.finding.line ?? 0) - (b.finding.line ?? 0))
     .map(({ finding, key }, index) => ({
@@ -50,7 +51,8 @@ export function dashboardFindings(findings: Finding[], files: CodeFile[], voided
         : finding.points >= 6 ? 'critical' : finding.points >= 4 ? 'high' : finding.points >= 2 ? 'medium' : 'low',
       openable: available.has(finding.path),
       voidKey: key,
-      voided: voided.has(key),
-      voidable: positive.has(key)
+      voided: voided.has(key) || voidedFiles.has(finding.path),
+      voidable: positive.has(key) && !voidedFiles.has(finding.path),
+      fileVoided: voidedFiles.has(finding.path)
     }));
 }

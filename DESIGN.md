@@ -7,7 +7,7 @@
 ## 组件
 
 - `src/extension.ts`：注册命令、进度和取消操作、读取设置与 SecretStorage、生成报告。
-- `src/sidebar.ts` 与 `src/dashboardData.ts`：右侧辅助边栏 Webview、三目标切换、齿轮设置、分数展示、严重程度着色与问题分页；`media/logo.svg` 用于界面，`media/logo.png` 用于扩展图标，`media/sidebar.svg` 用于视图图标。
+- `src/sidebar.ts` 与 `src/dashboardData.ts`：右侧辅助边栏 Webview、三目标切换、齿轮设置、页内扫描进度与取消、分数展示、严重程度着色及按需展开的问题列表；`media/logo.svg` 用于界面，`media/logo.png` 用于扩展图标，`media/sidebar.svg` 用于视图图标。
 - `src/collect.ts`：工作区、显式文件和临时 Git 克隆的代码收集；工作区通过文件系统遍历，避免旧的 `.gitignore` 或编辑器搜索设置干预评分选择。
 - `src/scanConfig.ts`：根目录 `.shitcode` 允许列表和 `.shitcode_ignore` 排除列表；优先使用前者，模式语法与 `.gitignore` 一致。
 - `src/fileWalk.ts`：Git 仓库快照的有效代码遍历，支持用户导入的评分规则；不读取 `.gitignore` 作为评分排除依据。
@@ -20,10 +20,10 @@
 - `src/aiRubric.ts`：固定 AI 条目、每项 A–E 锚点和权重；`AI_RUBRIC.md` 由此生成。
 - `src/scoreTransform.ts`：把内部原始分映射到 0–9 最终分。
 - `src/summaryMetrics.ts`：问题密度和语言覆盖。
-- `src/voidScore.ts`：为每个有分数的判断分配稳定的本轮标识；把已归一化和聚合的本地类别贡献按原始点数分摊，供手动 void 即时扣除。
+- `src/voidScore.ts`：为每个有分数的判断分配稳定的本轮标识；把已归一化和聚合的本地类别贡献按原始点数分摊，供逐条或整文件 void 即时扣除与恢复。
 - `src/gitBaseline.ts`：对工作区变更文件与 Git HEAD 做本地规则差异比较。
 
-流程：在右侧辅助边栏切换当前项目、单文件或 Git 仓库目标 → 收集代码 → 本地评分及可用的 Git 基线比较 → 已安全保存 Key 时自动进行 AI 固定条目分级 → 按统一长度基准聚合并转换最终分 → 在侧边栏展示最终分、问题密度、分项等级和逐条严重程度。用户可对有分数的条目手动 void 或恢复，评分、报告与 JSON 同步更新；重新评分时 void 状态重置。Git 克隆目录在操作结束时清理。
+流程：在右侧辅助边栏切换当前项目、单文件或 Git 仓库目标 → 页面内显示收集、本地分析和 AI 阶段进度 → 本地评分及可用的 Git 基线比较 → 已安全保存 Key 时自动进行 AI 固定条目分级 → 按统一长度基准聚合并转换最终分 → 在侧边栏展示最终分、问题密度、分项等级和逐条严重程度。用户可对有分数的条目或整个文件手动 void 或恢复，评分、报告与 JSON 同步更新；重新评分时 void 状态重置。Git 克隆目录在操作结束时清理。
 
 ## 有效代码与覆盖
 

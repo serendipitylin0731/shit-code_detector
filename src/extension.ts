@@ -22,6 +22,8 @@ export function activate(context: vscode.ExtensionContext): void {
   let latestJson: string | undefined;
   let latestFiles: CodeFile[] = [];
   let toggleCurrentVoid: ((key: string) => void) | undefined;
+  let toggleCurrentFileVoid: ((filePath: string) => void) | undefined;
+  let cancelCurrentScan: (() => void) | undefined;
   let reportId = 0;
   let running = false;
   let repositoryConfig: ScanConfig | undefined;
@@ -36,14 +38,21 @@ export function activate(context: vscode.ExtensionContext): void {
     }));
 
   async function run(scope: Scope, target?: { url?: string }): Promise<void> {
-    if (running) { vscode.window.showInformationMessage('Shit Code Detector：当前评分尚未完成。'); return; }
+    if (running) return;
     running = true;
     let cleanup: (() => Promise<void>) | undefined;
+    const cancellation = new vscode.CancellationTokenSource();
+    const token = cancellation.token;
+    cancelCurrentScan = () => cancellation.cancel();
     const editor = scope === 'files' ? (vscode.window.activeTextEditor ?? lastEditor) : undefined;
     try {
       if (scope === 'workspace' && !vscode.workspace.isTrusted) throw new Error('请先信任当前工作区，再扫描整个项目。');
       sidebar.setBusy(true, '正在准备评分…');
-      await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Shit Code Detector 正在评分', cancellable: true }, async (progress, token) => {
+      await sidebar.reveal();
+      const progress = { report: (update: { message: string; percentage?: number }) => {
+        if (!token.isCancellationRequested) sidebar.setBusy(true, update.message, update.percentage);
+      } };
+      await (async () => {
         progress.report({ message: '收集代码文件' });
         let entries: ScanEntry[];
         let label: string;
@@ -78,7 +87,9 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
         progress.report({ message: `读取 ${singleFileCollection ? 1 : entries.length} 个候选文件` });
-        const collection = singleFileCollection ?? await collectUris(entries, maxFileBytes, token);
+        const collection = singleFileCollection ?? await collectUris(entries, maxFileBytes, token, false,
+          (completed, total) => progress.report({ message: `读取代码文件 ${completed}/${total}`, percentage: total ? 100 * completed / total : 0 }));
+        if (token.isCancellationRequested) throw new vscode.CancellationError();
         if (scope === 'repository') collection.files.forEach(file => { file.uri = undefined; });
         if (!collection.files.length) throw new Error('没有找到可评分的代码文件。请检查 .shitcode／.shitcode_ignore、文件类型或排除规则。');
         progress.report({ message: `运行本地规则（${collection.files.length} 个文件）` });
@@ -91,6 +102,7 @@ export function activate(context: vscode.ExtensionContext): void {
         finally { analysisSubscription.dispose(); }
         const baselineRoot = selectedWorkspace?.uri.fsPath;
         const baseline = scope === 'workspace' && baselineRoot ? await compareGitBaseline(baselineRoot, result) : undefined;
+        if (token.isCancellationRequested) throw new vscode.CancellationError();
         let ai: AiResult | undefined;
         const apiKey = await context.secrets.get(secretKey);
         const aiEnabled = Boolean(apiKey);
@@ -104,67 +116,83 @@ export function activate(context: vscode.ExtensionContext): void {
               model: config.get<string>('ai.model', 'deepseek-flash'),
               apiKey,
               maxCharsPerRequest: config.get<number>('ai.maxCharsPerRequest', 12000),
-              onProgress: (completed, total) => progress.report({ message: `AI 代码片段 ${completed}/${total}` }),
-              onProjectProgress: (completed, total) => progress.report({ message: `AI 项目结构 ${completed}/${total}` })
+              onProgress: (completed, total) => progress.report({ message: `AI 代码片段 ${completed}/${total}`, percentage: total ? 100 * completed / total : 0 }),
+              onProjectProgress: (completed, total) => progress.report({ message: `AI 项目结构 ${completed}/${total}`, percentage: total ? 100 * completed / total : 0 })
             }, projectMode, controller.signal);
           } finally { subscription.dispose(); }
           result = mergeAnalysis(result, ai.findings);
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
         const fullResult = result;
+        const scanId = ++reportId;
         const voidModel = buildVoidScoreModel(fullResult);
         const voided = new Set<string>();
+        const voidedFiles = new Set<string>();
+        const pathByVoidKey = new Map(fullResult.findings.map((finding, index) => [findingVoidKey(finding, index), finding.path]));
         latestFiles = collection.files;
         const publish = (): void => {
-          const scored = voidModel.apply(voided);
+          const scored = voidModel.apply(voided, voidedFiles);
           const metrics = summaryMetrics(scored, ai?.assessments.filter(item => item.grade === 'U').length ?? 0);
           const allFindings = fullResult.findings;
           latestReport = makeReport(label, scope, scored.score, scored.categoryScores, scored.findings, collection.files,
-            collection.skipped, scored.checkCoverage, aiEnabled, ai, metrics, baseline, allFindings, voided);
-          latestJson = JSON.stringify({ schemaVersion: 11, target: label, scope, score: finalScore(scored.score), rawScore: scored.score,
+            collection.skipped, scored.checkCoverage, aiEnabled, ai, metrics, baseline, allFindings, voided, voidedFiles);
+          latestJson = JSON.stringify({ schemaVersion: 12, target: label, scope, score: finalScore(scored.score), rawScore: scored.score,
             referenceCodeLines: REFERENCE_CODE_LINES, effectiveCodeLines: metrics.effectiveLines,
             scoreFormula: SCORE_FORMULA, fileCount: collection.files.length, categoryContributions: scored.categoryScores,
-            metrics, voidedJudgments: [...voided],
+            metrics, voidedJudgments: [...voided], voidedFiles: [...voidedFiles],
             baseline: baseline ? { available: baseline.baselineAvailable, changedPaths: baseline.changedPaths, introduced: baseline.introduced.map(({ points, ...finding }) => finding), note: baseline.note } : undefined,
             checkCoverage: scored.checkCoverage, fileIssueCounts: fileScores(scored.findings, collection.files).map(({ score, ...entry }) => entry),
-            findings: allFindings.map((finding, index) => { const { points, ...entry } = finding; return { ...entry, voided: voided.has(findingVoidKey(finding, index)) }; }),
+            findings: allFindings.map((finding, index) => { const { points, ...entry } = finding; return { ...entry,
+              voided: voided.has(findingVoidKey(finding, index)) || voidedFiles.has(finding.path), voidedByFile: voidedFiles.has(finding.path) }; }),
             skipped: collection.skipped,
             ai: { enabled: aiEnabled, rubricVersion: AI_RUBRIC_VERSION, basePoints: AI_BASE_POINTS,
               criteria: AI_CRITERIA, assessments: (ai?.assessments ?? []).map(({ basePoints, weight, points, ...item }) =>
-                ({ ...item, voided: voided.has(assessmentVoidKey(item.path, item.criterion)) })),
+                ({ ...item, voided: voided.has(assessmentVoidKey(item.path, item.criterion)) || voidedFiles.has(item.path),
+                  voidedByFile: voidedFiles.has(item.path) })),
               reviewedFiles: ai?.reviewedFiles ?? 0, processedFiles: ai?.processedFiles ?? 0, totalFiles: ai?.totalFiles ?? collection.files.length,
               processedChars: ai?.processedChars ?? 0, totalChars: ai?.totalChars ?? 0,
               fileRequests: ai?.fileRequests ?? 0, reviewedProject: ai?.reviewedProject ?? false,
               projectRequests: ai?.projectRequests ?? 0, processedProjectRequests: ai?.processedProjectRequests ?? 0,
               errors: ai?.errors ?? [] } }, null, 2) + '\n';
+          const activeFileScores = fileScores(scored.findings, collection.files);
+          const activeFileCounts = new Map(activeFileScores.map(item => [item.path, item.findings]));
           const dashboard: DashboardResult = {
-            id: ++reportId, label, scope, score: finalScore(scored.score), scoreDisplay: formattedFinalScore(scored.score), fileCount: collection.files.length,
-            density: metrics.issueDensity.toFixed(1) + ' / 千行', voidedCount: voided.size,
+            id: ++reportId, scanId, label, scope, score: finalScore(scored.score), scoreDisplay: formattedFinalScore(scored.score), fileCount: collection.files.length,
+            density: metrics.issueDensity.toFixed(1) + ' / 千行', voidedCount: voided.size + voidedFiles.size,
             baseline: baseline?.baselineAvailable ? `${baseline.changedPaths.length} 个变更文件，${baseline.introduced.length} 条新增本地问题` : baseline?.note,
             skipped: `不支持 ${collection.skipped.unsupported} / 超大 ${collection.skipped.large} / 二进制 ${collection.skipped.binary} / 读取失败 ${collection.skipped.unreadable}`,
             checks: scored.checkCoverage,
             ai: !aiEnabled ? '未配置 Key' : `AI 已响应 ${ai?.processedFiles ?? 0}/${collection.files.length} 个文件、${ai?.processedChars ?? 0}/${ai?.totalChars ?? 0} 字符；全部条目有效分级 ${ai?.reviewedFiles ?? 0} 个文件；项目请求 ${ai?.processedProjectRequests ?? 0}/${ai?.projectRequests ?? 0}，${ai?.errors.length ?? 0} 个失败项`,
             aiAssessments: (ai?.assessments ?? []).map(({ basePoints, weight, points, ...item }) => {
               const voidKey = assessmentVoidKey(item.path, item.criterion);
-              return { ...item, voidKey, voided: voided.has(voidKey), voidable: voidModel.validKeys.has(voidKey) };
+              return { ...item, voidKey, voided: voided.has(voidKey) || voidedFiles.has(item.path),
+                voidable: voidModel.validKeys.has(voidKey) && !voidedFiles.has(item.path), fileVoided: voidedFiles.has(item.path) };
             }),
             categoryCounts: Object.fromEntries(Object.keys(scored.categoryScores).map(category =>
               [category, scored.findings.filter(finding => finding.category === category).length])) as Record<keyof typeof scored.categoryScores, number>,
-            fileScores: fileScores(scored.findings, collection.files).map(({ score, ...item }) => item),
-            findings: dashboardFindings(allFindings, collection.files, voided, voidModel.validKeys)
+            fileScores: activeFileScores.map(({ score, ...item }) => item),
+            fileRows: fileScores(allFindings, collection.files).map(item => ({ path: item.path, totalFindings: item.findings,
+              activeFindings: activeFileCounts.get(item.path) ?? 0,
+              voided: voidedFiles.has(item.path), voidable: voidModel.validFilePaths.has(item.path) })),
+            findings: dashboardFindings(allFindings, collection.files, voided, voidModel.validKeys, voidedFiles)
           };
           sidebar.setResult(dashboard);
         };
         toggleCurrentVoid = key => {
           if (!voidModel.validKeys.has(key)) return;
+          if (voidedFiles.has(pathByVoidKey.get(key) ?? '')) return;
           if (voided.has(key)) voided.delete(key);
           else voided.add(key);
           publish();
         };
+        toggleCurrentFileVoid = filePath => {
+          if (!voidModel.validFilePaths.has(filePath)) return;
+          if (voidedFiles.has(filePath)) voidedFiles.delete(filePath);
+          else voidedFiles.add(filePath);
+          publish();
+        };
         publish();
-        await sidebar.reveal();
         output.appendLine(`${new Date().toISOString()} ${label}: ${formattedFinalScore(fullResult.score)} / 9，${collection.files.length} 个文件`);
-        vscode.window.showInformationMessage(`Shit Code Detector：${formattedFinalScore(fullResult.score)} / 9，发现 ${fullResult.findings.length} 个问题。`);
       });
     } catch (error) {
       if (error instanceof vscode.CancellationError) sidebar.setBusy(false, '已取消评分');
@@ -172,11 +200,10 @@ export function activate(context: vscode.ExtensionContext): void {
         const message = error instanceof Error ? error.message : String(error);
         sidebar.setError(message);
         output.appendLine(`错误：${message}`);
-        vscode.window.showErrorMessage(`Shit Code Detector：${message}`);
       }
     } finally {
       try { await cleanup?.(); }
-      finally { running = false; }
+      finally { running = false; cancelCurrentScan = undefined; cancellation.dispose(); }
     }
   }
 
@@ -222,6 +249,8 @@ export function activate(context: vscode.ExtensionContext): void {
         case 'openReport': await showReport(); break;
         case 'exportJson': await exportJson(); break;
         case 'toggleVoid': if (!running && typeof message.key === 'string') toggleCurrentVoid?.(message.key); break;
+        case 'toggleFileVoid': if (!running && typeof message.path === 'string') toggleCurrentFileVoid?.(message.path); break;
+        case 'cancelScan': if (running) { sidebar.setBusy(true, '正在取消评分…'); cancelCurrentScan?.(); } break;
         case 'openFinding': {
           if (!Number.isInteger(message.index)) break;
           const item = sidebar.getFinding(message.index);
@@ -257,7 +286,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void { /* 无持久进程 */ }
 
-function makeReport(label: string, scope: Scope, rawScore: number, categoryScores: Record<string, number>, findings: Finding[], files: CodeFile[], skipped: Record<string, number>, checkCoverage: string, aiEnabled: boolean, ai: AiResult | undefined, metrics: ReturnType<typeof summaryMetrics>, baseline?: GitBaseline, allFindings: Finding[] = findings, voided: ReadonlySet<string> = new Set()): string {
+function makeReport(label: string, scope: Scope, rawScore: number, categoryScores: Record<string, number>, findings: Finding[], files: CodeFile[], skipped: Record<string, number>, checkCoverage: string, aiEnabled: boolean, ai: AiResult | undefined, metrics: ReturnType<typeof summaryMetrics>, baseline?: GitBaseline, allFindings: Finding[] = findings, voided: ReadonlySet<string> = new Set(), voidedFiles: ReadonlySet<string> = new Set()): string {
   const clean = (value: string): string => value.replaceAll('|', '\\|').replaceAll('\n', ' ').replaceAll('`', 'ˋ');
   const severity = (finding: Finding): string => finding.aiGrade ? ({ B: '轻微', C: '一般', D: '较重', E: '严重' } as const)[finding.aiGrade]
     : finding.points >= 6 ? '严重' : finding.points >= 4 ? '较重' : finding.points >= 2 ? '一般' : '轻微';
@@ -271,7 +300,7 @@ function makeReport(label: string, scope: Scope, rawScore: number, categoryScore
     `- 长度基准：${REFERENCE_CODE_LINES} 行有效代码；原始分统一乘以 ${REFERENCE_CODE_LINES} / max(有效行数, ${REFERENCE_CODE_LINES})`,
     `- 问题密度：${metrics.issueDensity.toFixed(1)} 条 / 千行有效代码（不足 ${REFERENCE_CODE_LINES} 行按 ${REFERENCE_CODE_LINES} 行计算）`,
     `- 已分析：${files.length} 个代码文件`,
-    `- 手动 void：${voided.size} 个判断条目（不计入当前分数）`,
+    `- 手动 void：${voided.size} 个判断条目、${voidedFiles.size} 个文件（不计入当前分数）`,
     `- 跳过：不支持或生成文件 ${skipped.unsupported}，超大文件 ${skipped.large}，二进制 ${skipped.binary}，读取失败 ${skipped.unreadable}`,
     `- 静态解析：${checkCoverage}`,
     `- AI：${!aiEnabled ? '未配置 Key' : `已响应 ${ai?.processedFiles ?? 0}/${files.length} 个文件、${ai?.processedChars ?? 0}/${ai?.totalChars ?? 0} 字符；全部条目有效分级 ${ai?.reviewedFiles ?? 0} 个文件；项目代码请求 ${ai?.processedProjectRequests ?? 0}/${ai?.projectRequests ?? 0} 次，项目全部条目${ai?.reviewedProject ? '完成分级' : '未完成分级'}`}`,
@@ -292,29 +321,30 @@ function makeReport(label: string, scope: Scope, rawScore: number, categoryScore
     '',
     ...(ai?.assessments.length ? [
       '| 对象 | 条目 | 等级 | 严重程度 | 状态 | 证据 |', '| --- | --- | --- | --- | --- | --- |',
-      ...[...ai.assessments].sort((a, b) => Number(voided.has(assessmentVoidKey(a.path, a.criterion))) - Number(voided.has(assessmentVoidKey(b.path, b.criterion))))
-        .map(item => `| ${clean(item.path)} | ${clean(item.title)} | ${item.grade}${item.adjustedFrom ? `（原建议 ${item.adjustedFrom}，校验后）` : ''} | ${{ A: '无问题', B: '轻微', C: '一般', D: '较重', E: '严重', 'N/A': '不适用', U: '未完成' }[item.grade]} | ${voided.has(assessmentVoidKey(item.path, item.criterion)) ? '已 void' : '生效'} | ${clean(item.reason)} |`),
+      ...[...ai.assessments].sort((a, b) => Number(voidedFiles.has(a.path) || voided.has(assessmentVoidKey(a.path, a.criterion))) - Number(voidedFiles.has(b.path) || voided.has(assessmentVoidKey(b.path, b.criterion))))
+        .map(item => `| ${clean(item.path)} | ${clean(item.title)} | ${item.grade}${item.adjustedFrom ? `（原建议 ${item.adjustedFrom}，校验后）` : ''} | ${{ A: '无问题', B: '轻微', C: '一般', D: '较重', E: '严重', 'N/A': '不适用', U: '未完成' }[item.grade]} | ${voidedFiles.has(item.path) ? '文件已 void' : voided.has(assessmentVoidKey(item.path, item.criterion)) ? '已 void' : '生效'} | ${clean(item.reason)} |`),
       ''
     ] : ['没有已完成的 AI 分项评分。', '']),
     '## 文件分数', '',
-    '文件问题数只包含定位到该文件的问题；项目级问题计入总分。', '',
-    '| 文件 | 问题数 |', '| --- | ---: |',
-    ...fileScores(findings, files).map(item => `| ${clean(item.path)} | ${item.findings} |`),
+    '文件问题数只包含定位到该文件的问题；项目级问题单独计入总分。整文件 void 保留扫描时的长度基准，项目级判断仍需单独 void。', '',
+    '| 文件 | 生效问题数 | 状态 |', '| --- | ---: | --- |',
+    ...fileScores(findings, files).sort((a, b) => Number(voidedFiles.has(a.path)) - Number(voidedFiles.has(b.path)))
+      .map(item => `| ${clean(item.path)} | ${item.findings} | ${voidedFiles.has(item.path) ? '文件已 void' : '生效'} |`),
     '', '## 具体问题', ''
   ];
   if (!allFindings.length) lines.push('没有发现符合当前规则的问题。');
   else {
     lines.push('| 严重程度 | 类别 | 状态 | 证据类型 | 置信度 | 位置 | 说明 |', '| --- | --- | --- | --- | --- | --- | --- |');
     for (const { finding, index } of allFindings.map((finding, index) => ({ finding, index }))
-      .sort((a, b) => Number(voided.has(findingVoidKey(a.finding, a.index))) - Number(voided.has(findingVoidKey(b.finding, b.index))) ||
+      .sort((a, b) => Number(voidedFiles.has(a.finding.path) || voided.has(findingVoidKey(a.finding, a.index))) - Number(voidedFiles.has(b.finding.path) || voided.has(findingVoidKey(b.finding, b.index))) ||
         b.finding.points - a.finding.points || a.finding.path.localeCompare(b.finding.path))) {
       const file = files.find(item => item.path === finding.path);
       const location = `${finding.path}${finding.line ? `:${finding.line}` : ''}`;
       const linked = file?.uri ? `[${clean(location)}](${file.uri}${finding.line ? `#L${finding.line}` : ''})` : clean(location);
-      lines.push(`| ${severity(finding)} | ${finding.category} | ${voided.has(findingVoidKey(finding, index)) ? '已 void' : '生效'} | ${finding.evidenceType === 'ai-inference' ? 'AI 推断' : '静态确认'} | ${finding.confidence ?? '中'} | ${linked} | ${clean(finding.message)} |`);
+      lines.push(`| ${severity(finding)} | ${finding.category} | ${voidedFiles.has(finding.path) ? '文件已 void' : voided.has(findingVoidKey(finding, index)) ? '已 void' : '生效'} | ${finding.evidenceType === 'ai-inference' ? 'AI 推断' : '静态确认'} | ${finding.confidence ?? '中'} | ${linked} | ${clean(finding.message)} |`);
     }
   }
   if (ai?.errors.length) lines.push('', '## AI 未完成项', '', ...ai.errors.map(error => `- ${clean(error)}`));
-  lines.push('', '## 评分说明', '', `内部累计值 x：本地与 AI 先统一乘 ${REFERENCE_CODE_LINES} / max(有效代码行数, ${REFERENCE_CODE_LINES})；本地类别再应用各自上限与系数，AI 条目按基础分 × 固定权重计入。手动 void 的本地问题按原类别贡献比例扣除；void 的 AI 条目整体不计分。最终分按 SCORING.md 中的五段函数转换，断点为 0.1、45、150、250。A 不计分；U 表示未审查完成，N/A 表示不适用。代码风格评分不判断运行结果。详见 SCORING.md 与 AI_RUBRIC.md。`, '');
+  lines.push('', '## 评分说明', '', `内部累计值 x：本地与 AI 先统一乘 ${REFERENCE_CODE_LINES} / max(有效代码行数, ${REFERENCE_CODE_LINES})；本地类别再应用各自上限与系数，AI 条目按基础分 × 固定权重计入。手动 void 的本地问题按原类别贡献比例扣除；void 的 AI 条目与整文件贡献不计分，恢复后按原有逐条 void 状态重新计算。最终分按 SCORING.md 中的五段函数转换，断点为 0.1、45、150、250。A 不计分；U 表示未审查完成，N/A 表示不适用。代码风格评分不判断运行结果。详见 SCORING.md 与 AI_RUBRIC.md。`, '');
   return lines.join('\n');
 }

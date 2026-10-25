@@ -12,7 +12,8 @@ export function findingVoidKey(finding: Finding, index: number): string {
 
 export interface VoidScoreModel {
   validKeys: Set<string>;
-  apply(voided: ReadonlySet<string>): Analysis;
+  validFilePaths: Set<string>;
+  apply(voided: ReadonlySet<string>, voidedFiles?: ReadonlySet<string>): Analysis;
 }
 
 /** Allocate capped local-category contributions once so voiding any positive item reduces the score. */
@@ -31,14 +32,17 @@ export function buildVoidScoreModel(base: Analysis): VoidScoreModel {
     return finding.points / total * Math.min(total * scale, policy.cap) * policy.multiplier;
   });
   const validKeys = new Set(keys.filter((_, index) => contributions[index] > 0));
+  const validFilePaths = new Set(base.findings.filter((finding, index) => contributions[index] > 0 && finding.path !== '<project>')
+    .map(finding => finding.path));
   return {
     validKeys,
-    apply(voided): Analysis {
-      if (!voided.size) return base;
+    validFilePaths,
+    apply(voided, voidedFiles = new Set()): Analysis {
+      if (!voided.size && !voidedFiles.size) return base;
       const categoryScores = Object.fromEntries(Object.keys(base.categoryScores).map(category => [category, 0])) as Record<Category, number>;
       const findings: Finding[] = [];
       for (let index = 0; index < base.findings.length; index++) {
-        if (voided.has(keys[index])) continue;
+        if (voided.has(keys[index]) || voidedFiles.has(base.findings[index].path)) continue;
         const finding = base.findings[index];
         findings.push(finding);
         categoryScores[finding.category] += contributions[index];

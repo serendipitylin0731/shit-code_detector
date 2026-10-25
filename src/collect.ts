@@ -15,11 +15,14 @@ export interface Collection {
   skipped: { unsupported: number; large: number; binary: number; unreadable: number };
 }
 
-export async function collectUris(entries: ScanEntry[], maxFileBytes: number, token?: vscode.CancellationToken, explicitSelection = false): Promise<Collection> {
+export async function collectUris(entries: ScanEntry[], maxFileBytes: number, token?: vscode.CancellationToken, explicitSelection = false,
+  onProgress?: (completed: number, total: number) => void): Promise<Collection> {
   const collection: Collection = { files: [], skipped: { unsupported: 0, large: 0, binary: 0, unreadable: 0 } };
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     if (token?.isCancellationRequested) throw new vscode.CancellationError();
-    if (isSensitiveConfig(entry.path) || !((explicitSelection || entry.configured) ? Boolean(languageOf(entry.path)) : isEligible(entry.path))) { collection.skipped.unsupported++; continue; }
+    if (isSensitiveConfig(entry.path) || !((explicitSelection || entry.configured) ? Boolean(languageOf(entry.path)) : isEligible(entry.path))) {
+      collection.skipped.unsupported++; onProgress?.(index + 1, entries.length); continue;
+    }
     try {
       const stat = await vscode.workspace.fs.stat(entry.uri);
       if (maxFileBytes > 0 && stat.size > maxFileBytes) { collection.skipped.large++; continue; }
@@ -30,6 +33,8 @@ export async function collectUris(entries: ScanEntry[], maxFileBytes: number, to
       collection.files.push({ path: entry.path.replaceAll('\\', '/'), language: languageOf(entry.path)!, content, uri: entry.uri.toString() });
     } catch {
       collection.skipped.unreadable++;
+    } finally {
+      onProgress?.(index + 1, entries.length);
     }
   }
   return collection;

@@ -54,3 +54,30 @@ test('超过 1000 行时 void AI 条目扣除长度归一后的贡献', () => {
   const model = buildVoidScoreModel(base);
   assert.equal(model.apply(new Set([assessmentVoidKey('large.py', 'abstraction_fit')])).score, 0);
 });
+
+test('整文件 void 排除该文件全部问题，恢复后保留逐条 void 状态', () => {
+  const findings: Finding[] = [
+    { path: 'a.py', line: 1, category: 'style', rule: 'trailing-space', points: 2, message: '空格', source: 'rules' },
+    { path: 'a.py', line: 2, category: 'architecture', rule: 'ai-abstraction_fit', points: 6, message: '抽象', source: 'ai', aiGrade: 'D' },
+    { path: 'b.py', line: 1, category: 'style', rule: 'trailing-space', points: 2, message: '空格', source: 'rules' },
+    { path: '<project>', category: 'architecture', rule: 'ai-project_structure', points: 4, message: '结构', source: 'ai', aiGrade: 'C' }
+  ];
+  const base: Analysis = { files: [
+    { path: 'a.py', language: 'Python', content: 'a\n'.repeat(1000) },
+    { path: 'b.py', language: 'Python', content: 'b\n'.repeat(1000) }
+  ], findings, categoryScores: { style: 2, naming: 0, readability: 0, complexity: 0, duplication: 0,
+    consistency: 0, architecture: 5 }, score: 7, checkCoverage: '' };
+  const model = buildVoidScoreModel(base);
+  const individual = new Set([findingVoidKey(findings[0], 0)]);
+  assert.equal(model.validFilePaths.has('a.py'), true);
+  assert.equal(model.validFilePaths.has('<project>'), false);
+  const individuallyVoided = model.apply(individual);
+  const fileVoided = model.apply(individual, new Set(['a.py']));
+  assert.ok(fileVoided.score < individuallyVoided.score);
+  assert.deepEqual(fileVoided.findings.map(item => item.path), ['b.py', '<project>']);
+  assert.equal(model.apply(individual, new Set()).score, individuallyVoided.score);
+  assert.equal(model.apply(new Set()).score, base.score);
+  const rows = dashboardFindings(findings, base.files, individual, model.validKeys, new Set(['a.py']));
+  assert.deepEqual(rows.slice(-2).map(row => row.path), ['a.py', 'a.py']);
+  assert.ok(rows.slice(-2).every(row => row.voided && row.fileVoided && !row.voidable));
+});
