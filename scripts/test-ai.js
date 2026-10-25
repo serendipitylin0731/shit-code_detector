@@ -23,10 +23,10 @@ async function main() {
       maxCharsPerRequest: 12000
     });
     const total = mergeAnalysis(localAnalysis, ai.findings);
-    console.log(`${item.name}: 本地 ${formattedFinalScore(localAnalysis.score)} / 9；最终 ${formattedFinalScore(total.score)} / 9；AI 条目记录 ${ai.assessments.length}（U ${ai.assessments.filter(entry => entry.grade === 'U').length}、校验排除 ${ai.assessments.filter(entry => entry.adjustedFrom).length}），完整分级 ${ai.reviewedFiles}/${ai.totalFiles} 文件，代码字符 ${ai.reviewedChars}/${ai.totalChars}`);
+    console.log(`${item.name}: 本地 ${formattedFinalScore(localAnalysis.score)} / 9；最终 ${formattedFinalScore(total.score)} / 9；AI 条目记录 ${ai.assessments.length}（U ${ai.assessments.filter(entry => entry.grade === 'U').length}、校验排除 ${ai.assessments.filter(entry => entry.adjustedFrom).length}），AI 响应 ${ai.processedFiles}/${ai.totalFiles} 文件、${ai.processedChars}/${ai.totalChars} 字符，完整分级 ${ai.reviewedFiles} 文件，项目请求 ${ai.processedProjectRequests}/${ai.projectRequests}`);
     for (const assessment of ai.assessments.filter(entry => entry.grade !== 'A')) console.log(`  ${assessment.grade} ${assessment.title} ${assessment.path}${assessment.line ? `:${assessment.line}` : ''} ${assessment.reason}`);
     for (const error of ai.errors) console.log(`  AI 未完成：${error}`);
-    if (ai.errors.length || ai.reviewedFiles !== ai.totalFiles || !ai.reviewedProject) process.exitCode = 1;
+    if (ai.errors.length || ai.processedFiles !== ai.totalFiles || ai.processedChars !== ai.totalChars || ai.processedProjectRequests !== ai.projectRequests) process.exitCode = 1;
   }
 }
 

@@ -112,7 +112,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const metrics = summaryMetrics(result, ai?.assessments.filter(item => item.grade === 'U').length ?? 0);
         const report = makeReport(label, scope, result.score, result.categoryScores, result.findings, collection.files, collection.skipped, result.checkCoverage, aiEnabled, ai, metrics, baseline);
         latestReport = report;
-        latestJson = JSON.stringify({ schemaVersion: 7, target: label, scope, score: finalScore(result.score), rawScore: result.score,
+        latestJson = JSON.stringify({ schemaVersion: 8, target: label, scope, score: finalScore(result.score), rawScore: result.score,
           scoreFormula: SCORE_FORMULA, fileCount: collection.files.length, categoryContributions: result.categoryScores,
           metrics,
           baseline: baseline ? { available: baseline.baselineAvailable, changedPaths: baseline.changedPaths, introduced: baseline.introduced.map(({ points, ...finding }) => finding), note: baseline.note } : undefined,
@@ -120,10 +120,11 @@ export function activate(context: vscode.ExtensionContext): void {
           findings: result.findings.map(({ points, ...finding }) => finding), skipped: collection.skipped,
           ai: { enabled: aiEnabled, rubricVersion: AI_RUBRIC_VERSION, basePoints: AI_BASE_POINTS,
             criteria: AI_CRITERIA, assessments: (ai?.assessments ?? []).map(({ basePoints, weight, points, ...item }) => item),
-            reviewedFiles: ai?.reviewedFiles ?? 0, totalFiles: ai?.totalFiles ?? collection.files.length,
-            reviewedChars: ai?.reviewedChars ?? 0, totalChars: ai?.totalChars ?? 0,
+            reviewedFiles: ai?.reviewedFiles ?? 0, processedFiles: ai?.processedFiles ?? 0, totalFiles: ai?.totalFiles ?? collection.files.length,
+            processedChars: ai?.processedChars ?? 0, totalChars: ai?.totalChars ?? 0,
             fileRequests: ai?.fileRequests ?? 0, reviewedProject: ai?.reviewedProject ?? false,
-            projectRequests: ai?.projectRequests ?? 0, errors: ai?.errors ?? [] } }, null, 2) + '\n';
+            projectRequests: ai?.projectRequests ?? 0, processedProjectRequests: ai?.processedProjectRequests ?? 0,
+            errors: ai?.errors ?? [] } }, null, 2) + '\n';
         latestFiles = collection.files;
         const dashboard: DashboardResult = {
           id: ++reportId, label, scope, score: finalScore(result.score), scoreDisplay: formattedFinalScore(result.score), fileCount: collection.files.length,
@@ -131,7 +132,7 @@ export function activate(context: vscode.ExtensionContext): void {
           baseline: baseline?.baselineAvailable ? `${baseline.changedPaths.length} 个变更文件，${baseline.introduced.length} 条新增本地问题` : baseline?.note,
           skipped: `不支持 ${collection.skipped.unsupported} / 超大 ${collection.skipped.large} / 二进制 ${collection.skipped.binary} / 读取失败 ${collection.skipped.unreadable}`,
           checks: result.checkCoverage,
-          ai: !aiEnabled ? '未配置 Key' : `完整分片审查 ${ai?.reviewedFiles ?? 0}/${collection.files.length} 个文件，${ai?.reviewedChars ?? 0}/${ai?.totalChars ?? 0} 字符，项目 ${ai?.reviewedProject ? '完成' : '未完成'}，${ai?.errors.length ?? 0} 个失败项`,
+          ai: !aiEnabled ? '未配置 Key' : `AI 已响应 ${ai?.processedFiles ?? 0}/${collection.files.length} 个文件、${ai?.processedChars ?? 0}/${ai?.totalChars ?? 0} 字符；全部条目有效分级 ${ai?.reviewedFiles ?? 0} 个文件；项目请求 ${ai?.processedProjectRequests ?? 0}/${ai?.projectRequests ?? 0}，${ai?.errors.length ?? 0} 个失败项`,
           aiAssessments: (ai?.assessments ?? []).map(({ basePoints, weight, points, ...item }) => item),
           categoryCounts: Object.fromEntries(Object.keys(result.categoryScores).map(category =>
             [category, result.findings.filter(finding => finding.category === category).length])) as Record<keyof typeof result.categoryScores, number>,
@@ -249,7 +250,7 @@ function makeReport(label: string, scope: Scope, rawScore: number, categoryScore
     `- 已分析：${files.length} 个代码文件`,
     `- 跳过：不支持或生成文件 ${skipped.unsupported}，超大文件 ${skipped.large}，二进制 ${skipped.binary}，读取失败 ${skipped.unreadable}`,
     `- 静态解析：${checkCoverage}`,
-    `- AI：${!aiEnabled ? '未配置 Key' : `完整分片审查 ${ai?.reviewedFiles ?? 0}/${files.length} 个文件；有效审查代码 ${ai?.reviewedChars ?? 0}/${ai?.totalChars ?? 0} 字符；文件请求 ${ai?.fileRequests ?? 0} 次；项目元数据请求 ${ai?.projectRequests ?? 0} 次，项目分级${ai?.reviewedProject ? '完成' : '未完成'}`}`,
+    `- AI：${!aiEnabled ? '未配置 Key' : `已响应 ${ai?.processedFiles ?? 0}/${files.length} 个文件、${ai?.processedChars ?? 0}/${ai?.totalChars ?? 0} 字符；全部条目有效分级 ${ai?.reviewedFiles ?? 0} 个文件；项目代码请求 ${ai?.processedProjectRequests ?? 0}/${ai?.projectRequests ?? 0} 次，项目全部条目${ai?.reviewedProject ? '完成分级' : '未完成分级'}`}`,
     `- AI 未完成条目：${metrics.uncertainAssessments}`, '', '## 语言覆盖', '',
     '| 语言 | 文件数 | 分析能力 | 语法失败文件数 |', '| --- | ---: | --- | ---: |',
     ...metrics.languageCoverage.map(item => `| ${item.language} | ${item.files} | ${item.parser} | ${item.parseFailures} |`),

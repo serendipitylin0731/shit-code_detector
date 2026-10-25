@@ -8,6 +8,7 @@ test('代码分片完整覆盖跨行和超长单行，保留原始行号', () =>
   assert.equal(chunks.reduce((sum, chunk) => sum + chunk.chars, 0), content.length);
   assert.ok(chunks.length >= 3);
   assert.ok(chunks.every(chunk => chunk.chars <= 1000));
+  assert.ok(chunks.every(chunk => chunk.code.length <= 1000));
   assert.ok(chunks.some(chunk => chunk.visibleLines.has(2) && chunk.code.includes('(续)')));
   assert.ok(chunks.at(-1)?.visibleLines.has(3));
 });

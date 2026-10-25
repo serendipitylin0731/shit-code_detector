@@ -142,9 +142,9 @@ test('一个可见全局配置也可支撑项目安全问题', async () => {
   } finally { globalThis.fetch = original; }
 });
 
-test('大项目全部文件逐片审查，项目元数据覆盖全部文件', async () => {
+test('大项目全部文件逐片审查，项目代码也覆盖全部文件', async () => {
   const original = globalThis.fetch;
-  const projectInputs: { totalFiles: number; fileSummaries: { path: string }[] }[] = [];
+  const projectInputs: { totalFiles: number; codeParts: { path: string }[] }[] = [];
   globalThis.fetch = async (_url, init) => {
     const request = JSON.parse(String(init?.body));
     const user = String(request.messages[1].content);
@@ -160,10 +160,12 @@ test('大项目全部文件逐片审查，项目元数据覆盖全部文件', as
     const result = await analyzeWithAi(analyze(files), { ...options, maxCharsPerRequest: 1000 });
     assert.equal(result.totalFiles, 20);
     assert.equal(result.reviewedFiles, 20);
-    assert.equal(result.reviewedChars, result.totalChars);
+    assert.equal(result.processedFiles, 20);
+    assert.equal(result.processedChars, result.totalChars);
     assert.ok(result.fileRequests > files.length);
     assert.ok(projectInputs.every(input => input.totalFiles === 20));
-    assert.deepEqual(projectInputs.flatMap(input => input.fileSummaries.map(item => item.path)).sort(), files.map(file => file.path).sort());
+    assert.deepEqual([...new Set(projectInputs.flatMap(input => input.codeParts.map(item => item.path)))].sort(), files.map(file => file.path).sort());
+    assert.ok(JSON.stringify(projectInputs).includes('def item_19'));
     assert.equal(result.reviewedProject, false);
     assert.equal(result.assessments.find(item => item.criterion === 'dependency_direction')?.grade, 'U');
   } finally { globalThis.fetch = original; }
@@ -206,7 +208,7 @@ test('任一代码分片请求失败时不把该文件标成完整审查', async
     const result = await analyzeWithAi(analyze([file], [], false), { ...options, maxCharsPerRequest: 500 }, false);
     assert.ok(result.fileRequests > 1);
     assert.equal(result.reviewedFiles, 0);
-    assert.ok(result.reviewedChars < result.totalChars);
+    assert.ok(result.processedChars < result.totalChars);
     assert.equal(result.assessments.find(item => item.criterion === 'logic_correctness')?.grade, 'U');
     assert.ok(result.errors.some(error => error.includes('HTTP 429')));
   } finally { globalThis.fetch = original; }
