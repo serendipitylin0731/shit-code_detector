@@ -27,8 +27,10 @@ test('侧边栏只显示当前目标的操作入口，Webview 脚本可解析', 
   provider.setBusy(true, '本地规则 2/4 个文件', 50);
   assert.equal((states.at(-1) as { progress: number }).progress, 50);
   assert.equal((states.at(-1) as { busy: boolean }).busy, true);
+  provider.setBusy(true, '汇总本地与跨文件检查…');
+  assert.equal((states.at(-1) as { progress: number }).progress, 50);
   onSidebarMessage?.({ action: 'ready' });
-  assert.equal((states.at(-1) as { message: string }).message, '本地规则 2/4 个文件');
+  assert.equal((states.at(-1) as { message: string }).message, '汇总本地与跨文件检查…');
   assert.match(webview.html, /id="targetRoot"/);
   assert.match(webview.html, /id="targetFile"/);
   assert.match(webview.html, /id="targetRepository"/);
@@ -40,6 +42,7 @@ test('侧边栏只显示当前目标的操作入口，Webview 脚本可解析', 
   assert.match(webview.html, /id="fileVoidToggle"/);
   assert.match(webview.html, /id="showMore"/);
   assert.match(webview.html, /id="progressPanel"/);
+  assert.match(webview.html, /\.progress-track \{[^}]*background: var\(--vscode-panel-border/);
   assert.match(webview.html, /id="summary"[^>]*>[^<]*<\/div><section class="progress-panel" id="progressPanel"/);
   assert.match(webview.html, /id="cancelScan"/);
   assert.doesNotMatch(webview.html, /id="previous"|id="next"|id="pageLabel"/);
@@ -91,10 +94,10 @@ test('侧边栏只显示当前目标的操作入口，Webview 脚本可解析', 
   assert.equal(nodes.get('progressPanel')?.hidden, false);
   assert.equal(nodes.get('progressTrack')?.attributes['aria-valuenow'], '50');
   assert.equal(nodes.get('progressFill')?.style.width, '50%');
-  assert.equal(nodes.get('progressPercent')?.textContent, '本阶段 50%');
-  onMessage({ data: { type: 'state', busy: true, message: '汇总本地与跨文件检查…' } });
-  assert.equal(nodes.get('progressPercent')?.textContent, '进行中');
-  assert.equal(nodes.get('progressTrack')?.attributes['aria-valuenow'], undefined);
+  assert.equal(nodes.get('progressPercent')?.textContent, '总进度 50%');
+  onMessage({ data: { type: 'state', busy: true, message: '汇总本地与跨文件检查…', progress: 50 } });
+  assert.equal(nodes.get('progressPercent')?.textContent, '总进度 50%');
+  assert.equal(nodes.get('progressTrack')?.attributes['aria-valuenow'], '50');
   nodes.get('cancelScan')?.onclick?.();
   assert.equal((messages.at(-1) as { action: string }).action, 'cancelScan');
 

@@ -12,9 +12,10 @@ import { ScanConfig, selectScanConfig } from './scanConfig';
 import { dashboardFindings, fileScores } from './dashboardData';
 import { DashboardResult, SidebarAction, SidebarProvider } from './sidebar';
 import { assessmentVoidKey, buildVoidScoreModel, findingVoidKey } from './voidScore';
+import { ScanProgress, ScanScope } from './scanProgress';
 
 const secretKey = 'shitCodeDetector.ai.apiKey';
-type Scope = 'workspace' | 'files' | 'repository';
+type Scope = ScanScope;
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('Shit Code Detector');
@@ -47,13 +48,16 @@ export function activate(context: vscode.ExtensionContext): void {
     const editor = scope === 'files' ? (vscode.window.activeTextEditor ?? lastEditor) : undefined;
     try {
       if (scope === 'workspace' && !vscode.workspace.isTrusted) throw new Error('请先信任当前工作区，再扫描整个项目。');
-      sidebar.setBusy(true, '正在准备评分…');
+      sidebar.setBusy(true, '正在准备评分…', 0);
       void sidebar.reveal().catch(error => output.appendLine(`打开评分侧边栏失败：${error instanceof Error ? error.message : String(error)}`));
+      let overallProgress = 0;
       const progress = { report: (update: { message: string; percentage?: number }) => {
-        if (!token.isCancellationRequested) sidebar.setBusy(true, update.message, update.percentage);
+        if (token.isCancellationRequested) return;
+        overallProgress = Math.max(overallProgress, Math.min(100, update.percentage ?? overallProgress));
+        sidebar.setBusy(true, update.message, overallProgress);
       } };
       const executeScan = async (): Promise<void> => {
-        progress.report({ message: '查找代码文件…' });
+        progress.report({ message: '查找代码文件…', percentage: 0 });
         await new Promise<void>(resolve => setImmediate(resolve));
         if (token.isCancellationRequested) throw new vscode.CancellationError();
         let entries: ScanEntry[];
@@ -62,11 +66,15 @@ export function activate(context: vscode.ExtensionContext): void {
         let singleFileCollection: Awaited<ReturnType<typeof collectActiveDocument>> | undefined;
         const config = vscode.workspace.getConfiguration('shitCodeDetector');
         const maxFileBytes = config.get<number>('maxFileBytes', 0);
+        const apiKey = await context.secrets.get(secretKey);
+        const aiEnabled = Boolean(apiKey);
+        const plan = new ScanProgress(scope, aiEnabled);
+        if (token.isCancellationRequested) throw new vscode.CancellationError();
         let lastDiscoveryUpdate = 0;
         const onDiscovered = (count: number): void => {
           const now = Date.now();
           if (count === 1 || now - lastDiscoveryUpdate >= 150) {
-            progress.report({ message: `已找到 ${count} 个候选文件…` });
+            progress.report({ message: `已找到 ${count} 个候选文件…`, percentage: plan.stage('discovery') });
             lastDiscoveryUpdate = now;
           }
         };
@@ -89,41 +97,42 @@ export function activate(context: vscode.ExtensionContext): void {
           if (!input && target?.url === undefined) { sidebar.setBusy(false); return; }
           if (!input?.trim()) throw new Error('请输入 HTTPS Git 仓库地址。');
           const url = validateRepositoryUrl(input);
-          progress.report({ message: '克隆 Git 仓库' });
+          progress.report({ message: '克隆 Git 仓库', percentage: plan.stage('discovery') });
           const clone = await cloneRepository(url, token);
           cleanup = clone.cleanup;
+          progress.report({ message: '查找仓库代码文件…', percentage: plan.stage('discovery', 1, 2) });
           entries = await directoryEntries(clone.directory, token, repositoryConfig, onDiscovered);
           label = url;
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
+        plan.stage('discovery', 1, 1);
         const candidateCount = singleFileCollection ? 1 : entries.length;
-        progress.report({ message: `读取代码文件 0/${candidateCount}`, percentage: 0 });
+        progress.report({ message: `读取代码文件 0/${candidateCount}`, percentage: plan.stage('read', 0, candidateCount) });
         const collection = singleFileCollection ?? await collectUris(entries, maxFileBytes, token, false,
-          (completed, total) => progress.report({ message: `读取代码文件 ${completed}/${total}`, percentage: total ? 100 * completed / total : 0 }));
-        if (singleFileCollection) progress.report({ message: '读取代码文件 1/1', percentage: 100 });
+          (completed, total) => progress.report({ message: `读取代码文件 ${completed}/${total}`, percentage: plan.stage('read', completed, total) }));
+        if (singleFileCollection) progress.report({ message: '读取代码文件 1/1', percentage: plan.stage('read', 1, 1) });
         if (token.isCancellationRequested) throw new vscode.CancellationError();
         if (scope === 'repository') collection.files.forEach(file => { file.uri = undefined; });
         if (!collection.files.length) throw new Error('没有找到可评分的代码文件。请检查 .shitcode／.shitcode_ignore、文件类型或排除规则。');
-        progress.report({ message: `本地规则 0/${collection.files.length} 个文件`, percentage: 0 });
+        progress.report({ message: `本地规则 0/${collection.files.length} 个文件`, percentage: plan.stage('local', 0, collection.files.length) });
         const projectMode = scope !== 'files';
         const analysisController = new AbortController();
         const analysisSubscription = token.onCancellationRequested(() => analysisController.abort());
         let result;
         try { result = await analyzeInWorker(collection.files, projectMode, analysisController.signal, (completed, total, phase) => {
-          if (phase === 'finalize') progress.report({ message: '汇总本地与跨文件检查…' });
-          else progress.report({ message: `本地规则 ${completed}/${total} 个文件`, percentage: total ? 100 * completed / total : 0 });
+          if (phase === 'finalize') progress.report({ message: '汇总本地与跨文件检查…', percentage: plan.stage('local', completed, total) });
+          else progress.report({ message: `本地规则 ${completed}/${total} 个文件`, percentage: plan.stage('local', completed, total) });
         }); }
         catch (error) { if (token.isCancellationRequested) throw new vscode.CancellationError(); throw error; }
         finally { analysisSubscription.dispose(); }
         const baselineRoot = selectedWorkspace?.uri.fsPath;
-        if (scope === 'workspace' && baselineRoot) progress.report({ message: '比对 Git 基线…' });
+        if (scope === 'workspace' && baselineRoot) progress.report({ message: '比对 Git 基线…', percentage: plan.stage('baseline') });
         const baseline = scope === 'workspace' && baselineRoot ? await compareGitBaseline(baselineRoot, result) : undefined;
         if (token.isCancellationRequested) throw new vscode.CancellationError();
+        if (scope === 'workspace' && baselineRoot) plan.stage('baseline', 1, 1);
         let ai: AiResult | undefined;
-        const apiKey = await context.secrets.get(secretKey);
-        const aiEnabled = Boolean(apiKey);
         if (apiKey) {
-          progress.report({ message: '准备 AI 审查…' });
+          progress.report({ message: '准备 AI 审查…', percentage: plan.stage('aiFiles') });
           const controller = new AbortController();
           const subscription = token.onCancellationRequested(() => controller.abort());
           try {
@@ -132,14 +141,14 @@ export function activate(context: vscode.ExtensionContext): void {
               model: config.get<string>('ai.model', 'deepseek-flash'),
               apiKey,
               maxCharsPerRequest: config.get<number>('ai.maxCharsPerRequest', 12000),
-              onProgress: (completed, total) => progress.report({ message: `AI 代码片段 ${completed}/${total}`, percentage: total ? 100 * completed / total : 0 }),
-              onProjectProgress: (completed, total) => progress.report({ message: `AI 项目结构 ${completed}/${total}`, percentage: total ? 100 * completed / total : 0 })
+              onProgress: (completed, total) => progress.report({ message: `AI 代码片段 ${completed}/${total}`, percentage: plan.stage('aiFiles', completed, total) }),
+              onProjectProgress: (completed, total) => progress.report({ message: `AI 项目结构 ${completed}/${total}`, percentage: plan.stage('aiProject', completed, total) })
             }, projectMode, controller.signal);
           } finally { subscription.dispose(); }
           result = mergeAnalysis(result, ai.findings);
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
-        progress.report({ message: '整理评分结果…' });
+        progress.report({ message: '整理评分结果…', percentage: plan.stage('report') });
         const fullResult = result;
         const scanId = ++reportId;
         const voidModel = buildVoidScoreModel(fullResult);
@@ -193,6 +202,7 @@ export function activate(context: vscode.ExtensionContext): void {
               voided: voidedFiles.has(item.path), voidable: voidModel.validFilePaths.has(item.path) })),
             findings: dashboardFindings(allFindings, collection.files, voided, voidModel.validKeys, voidedFiles)
           };
+          if (running) progress.report({ message: '评分完成', percentage: plan.complete() });
           sidebar.setResult(dashboard);
         };
         toggleCurrentVoid = key => {
