@@ -1,4 +1,4 @@
-import { Analysis, Category, Finding, LOCAL_CATEGORY_POLICY } from './analysis';
+import { Analysis, Category, Finding, lengthFactor, LOCAL_CATEGORY_POLICY } from './analysis';
 
 export function assessmentVoidKey(path: string, criterion: string): string {
   return JSON.stringify(['ai', path, criterion]);
@@ -21,17 +21,14 @@ export function buildVoidScoreModel(base: Analysis): VoidScoreModel {
   for (const finding of base.findings) if (finding.source === 'rules') {
     localTotals.set(finding.category, (localTotals.get(finding.category) ?? 0) + finding.points);
   }
-  const effectiveLines = base.files.reduce((sum, file) => sum + file.content.split(/\r?\n/)
-    .filter(line => line.trim() && !/^\s*(?:#|\/\/|\*|<!--)/.test(line)).length, 0);
-  const heuristicScale = Math.min(1, Math.sqrt(1000 / Math.max(effectiveLines, 1)));
+  const scale = lengthFactor(base.files);
   const keys = base.findings.map(findingVoidKey);
   const contributions = base.findings.map(finding => {
-    if (finding.source === 'ai') return finding.points;
+    if (finding.source === 'ai') return finding.points * scale;
     const total = localTotals.get(finding.category) ?? 0;
     if (!total) return 0;
     const policy = LOCAL_CATEGORY_POLICY[finding.category];
-    const scale = ['architecture', 'correctness', 'security'].includes(finding.category) ? 1 : heuristicScale;
-    return finding.points / total * Math.min(total, policy.cap) * policy.multiplier * scale;
+    return finding.points / total * Math.min(total * scale, policy.cap) * policy.multiplier;
   });
   const validKeys = new Set(keys.filter((_, index) => contributions[index] > 0));
   return {
@@ -47,7 +44,7 @@ export function buildVoidScoreModel(base: Analysis): VoidScoreModel {
         categoryScores[finding.category] += contributions[index];
       }
       const score = Object.values(categoryScores).reduce((sum, points) => sum + points, 0);
-      return { files: base.files, findings, score, categoryScores, checkCoverage: base.checkCoverage };
+      return { files: base.files, findings, score, categoryScores, checkCoverage: base.checkCoverage, parseFailurePaths: base.parseFailurePaths };
     }
   };
 }

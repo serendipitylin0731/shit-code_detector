@@ -23,11 +23,9 @@ def inspect_file(item):
     try:
         tree = ast.parse(source, filename=path, type_comments=True)
     except SyntaxError as error:
-        add(error.lineno or 1, "correctness", "syntax-error", 5,
-            "Python 语法错误：" + str(error.msg))
-        return findings
+        return findings, True
     except (ValueError, TypeError, MemoryError, RecursionError):
-        return findings
+        return findings, True
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -44,15 +42,6 @@ def inspect_file(item):
             if nesting > 4:
                 add(node.lineno, "complexity", "control-nesting", (nesting - 4) * 2,
                     f"函数“{node.name}”控制流嵌套 {nesting} 层，超过阈值 4")
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.If,
-                             ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith,
-                             ast.Try, ast.ExceptHandler)):
-            for body in (getattr(node, "body", []), getattr(node, "orelse", []), getattr(node, "finalbody", [])):
-                for previous, current in zip(body, body[1:]):
-                    if isinstance(previous, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
-                        add(current.lineno, "correctness", "unreachable-code", 4,
-                            "前一条语句已终止当前控制流，后续代码不可达")
-                        break
         if isinstance(node, ast.ExceptHandler):
             broad = node.type is None or (isinstance(node.type, ast.Name) and
                     node.type.id in {"Exception", "BaseException"})
@@ -61,25 +50,13 @@ def inspect_file(item):
                 silent = isinstance(statement, ast.Pass) or (isinstance(statement, ast.Expr) and
                          isinstance(statement.value, ast.Constant) and statement.value.value is Ellipsis)
                 if silent and broad and not is_test:
-                    add(node.lineno, "correctness", "swallowed-error", 5,
-                        "宽泛 except 块直接跳过异常，失败时没有可观察结果")
-        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
-            right = node.right
-            if isinstance(right, ast.Constant) and isinstance(right.value, (int, float, complex)) and right.value == 0:
-                add(node.lineno, "correctness", "zero-division", 5,
-                    "除数是字面量 0，执行时会抛出 ZeroDivisionError")
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Constant) and node.value.value is None:
-            add(node.lineno, "correctness", "none-dereference", 5,
-                "直接访问 None 的属性会抛出 AttributeError")
-        if isinstance(node, ast.Subscript) and isinstance(node.value, (ast.List, ast.Tuple)) and not node.value.elts:
-            if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, int):
-                add(node.lineno, "correctness", "empty-index", 5,
-                    "对空列表或元组按整数下标取值会抛出 IndexError")
+                    add(node.lineno, "consistency", "swallowed-error", 2,
+                        "宽泛 except 块静默跳过，没有说明忽略异常的意图")
 
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
     except (tokenize.TokenError, IndentationError):
-        return findings
+        return findings, False
     previous = None
     depth = 0
     operators = {"=", "+=", "-=", "==", "!=", "<", ">", "<=", ">=", "+", "-"}
@@ -108,7 +85,7 @@ def inspect_file(item):
                 depth = max(0, depth - 1)
         if token.type not in (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENCODING):
             previous = token.string
-    return findings
+    return findings, False
 
 
 def function_complexity(function):
@@ -146,9 +123,14 @@ def function_complexity(function):
 def main():
     items = json.load(sys.stdin)
     result = []
+    parse_failure_paths = []
     for item in items:
-        result.extend(inspect_file(item))
-    json.dump({"checked": len(items), "findings": result}, sys.stdout, ensure_ascii=False)
+        findings, parse_failed = inspect_file(item)
+        result.extend(findings)
+        if parse_failed:
+            parse_failure_paths.append(item["path"])
+    json.dump({"checked": len(items), "findings": result,
+               "parseFailurePaths": parse_failure_paths}, sys.stdout, ensure_ascii=False)
 
 
 if __name__ == "__main__":

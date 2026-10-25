@@ -15,32 +15,34 @@ test('空行阈值放宽，文件长度不单独作为缺陷', () => {
   assert.ok(!long.findings.some(finding => finding.rule === 'large-file'));
 });
 
-test('JS/TS 解析器区分运算符、字符串与语法错误', () => {
+test('JS/TS 解析器只给写法评分，运行异常与语法错误不计分', () => {
   const source = analyze([file('main.ts', 'const total=left+right;\nconst label = "a=b";\n//bad\nnull.value;\nJSON.parse("{bad}");')], [], false);
   assert.equal(source.findings.filter(finding => finding.rule === 'operator-spacing').length, 2);
   assert.ok(source.findings.some(finding => finding.rule === 'comment-spacing'));
-  assert.ok(source.findings.some(finding => finding.rule === 'null-dereference'));
-  assert.ok(source.findings.some(finding => finding.rule === 'invalid-json-parse'));
+  assert.ok(!source.findings.some(finding => finding.rule === 'null-dereference'));
+  assert.ok(!source.findings.some(finding => finding.rule === 'invalid-json-parse'));
   assert.ok(!source.findings.some(finding => finding.rule === 'syntax-error'));
   const broken = analyze([file('broken.ts', 'const answer = ;')], [], false);
-  assert.ok(broken.findings.some(finding => finding.rule === 'syntax-error'));
+  assert.equal(broken.score, 0);
+  assert.deepEqual(broken.parseFailurePaths, ['broken.ts']);
 });
 
-test('Python AST 与 tokenizer 查出明显异常，保留关键字参数惯例', () => {
+test('Python AST 与 tokenizer 只给写法评分，保留关键字参数惯例', () => {
   const source = analyze([file('main.py', 'def process(value):\n    amount=10\n    #bad\n    helper(value=1)\n    return amount/0\n')], [], false);
-  assert.ok(source.findings.some(finding => finding.rule === 'zero-division'));
+  assert.ok(!source.findings.some(finding => finding.rule === 'zero-division'));
   assert.ok(source.findings.some(finding => finding.rule === 'comment-spacing'));
   assert.equal(source.findings.filter(finding => finding.rule === 'operator-spacing').length, 1);
   const none = analyze([file('none.py', 'print(None.value)')], [], false);
-  assert.ok(none.findings.some(finding => finding.rule === 'none-dereference'));
+  assert.equal(none.score, 0);
 });
 
-test('C/C++ 宏规则发现优先级与重复求值风险', () => {
+test('C/C++ 宏规则只提示可读的展开结构，不归入正确性', () => {
   const result = analyze([file('macros.h', '#define SQUARE(x) x*x\n#define int long long\n#define ANSWER 42\nint result=5;')], [], false);
   assert.ok(result.findings.some(finding => finding.rule === 'macro-expression-parens'));
   assert.ok(result.findings.some(finding => finding.rule === 'macro-argument-parens'));
   assert.ok(result.findings.some(finding => finding.rule === 'macro-repeat-argument'));
   assert.ok(result.findings.some(finding => finding.rule === 'macro-keyword'));
+  assert.ok(result.findings.every(finding => !['correctness', 'security'].includes(finding.category)));
   assert.ok(result.findings.some(finding => finding.rule === 'operator-spacing'));
   assert.ok(!result.findings.some(finding => finding.message.includes('ANSWER')));
   const safe = analyze([file('safe.h', '#define URL "https://example.com/a+b"\n#define PRINT(x) printf("%s", x)')], [], false);
@@ -64,4 +66,15 @@ test('注释空格缺陷不再独立触发重复的一致性扣分', () => {
     assert.equal(result.findings.filter(finding => finding.rule === 'comment-spacing').length, 1);
     assert.equal(result.findings.filter(finding => finding.rule === 'comment-style').length, 0);
   }
+});
+
+test('只有运行结果不同但写法相同的代码得到相同风格分', () => {
+  const safe = analyze([file('example.ts', 'const value = 1 / 1;\nconst data = JSON.parse("{}");')], [], false);
+  const broken = analyze([file('example.ts', 'const value = 1 / 0;\nconst data = JSON.parse("{bad}");')], [], false);
+  assert.equal(safe.score, broken.score);
+  assert.deepEqual(safe.findings.map(item => item.rule), broken.findings.map(item => item.rule));
+  const validJson = analyze([file('data.json', '{"value": 1}')], [], false);
+  const invalidJson = analyze([file('data.json', '{"value": }')], [], false);
+  assert.equal(validJson.score, invalidJson.score);
+  assert.deepEqual(invalidJson.parseFailurePaths, ['data.json']);
 });

@@ -16,7 +16,7 @@ const spacedOperators = new Set<number>([
   ts.SyntaxKind.QuestionQuestionToken
 ]);
 
-export function inspectTypeScript(file: CodeFile): Finding[] {
+export function inspectTypeScript(file: CodeFile): { findings: Finding[]; parseFailed: boolean } {
   const findings: Finding[] = [];
   const add = (line: number, category: Finding['category'], rule: string, points: number, message: string): void => {
     findings.push({ path: file.path, line, category, rule, points, message, source: 'rules' });
@@ -25,10 +25,7 @@ export function inspectTypeScript(file: CodeFile): Finding[] {
   const source = ts.createSourceFile(file.path, file.content, ts.ScriptTarget.Latest, true, scriptKind);
   const lineAt = (position: number): number => source.getLineAndCharacterOfPosition(position).line + 1;
   const diagnostics = (source as Ts.SourceFile & { parseDiagnostics?: readonly Ts.Diagnostic[] }).parseDiagnostics ?? [];
-  for (const diagnostic of diagnostics.slice(0, 5)) {
-    add(lineAt(diagnostic.start ?? 0), 'correctness', 'syntax-error', 5, `语法错误：${ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ')}`);
-  }
-  if (diagnostics.length) return findings;
+  if (diagnostics.length) return { findings, parseFailed: true };
 
   const scanner = ts.createScanner(ts.ScriptTarget.Latest, false,
     scriptKind === ts.ScriptKind.TSX || scriptKind === ts.ScriptKind.JSX ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard,
@@ -80,37 +77,12 @@ export function inspectTypeScript(file: CodeFile): Finding[] {
     }
     if (ts.isCatchClause(node)) {
       const statements = node.block.statements;
-      if (!statements.length) add(lineAt(node.getStart(source)), 'correctness', 'swallowed-error', 5, '空 catch 块吞掉异常，失败时没有可观察结果');
-    }
-    if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && isNullishLiteral(node.expression)) {
-      add(lineAt(node.getStart(source)), 'correctness', 'null-dereference', 5, '直接访问 null/undefined 的成员会抛出 TypeError');
-    }
-    if (ts.isCallExpression(node) && isNullishLiteral(node.expression)) {
-      add(lineAt(node.getStart(source)), 'correctness', 'null-call', 5, '直接调用 null/undefined 会抛出 TypeError');
-    }
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
-        ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'JSON' &&
-        node.expression.name.text === 'parse' && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0])) {
-      try { JSON.parse(node.arguments[0].text); }
-      catch { add(lineAt(node.getStart(source)), 'correctness', 'invalid-json-parse', 4, 'JSON.parse 的字面量参数不是合法 JSON，执行时会抛出 SyntaxError'); }
-    }
-    if (ts.isBlock(node)) {
-      for (let index = 1; index < node.statements.length; index++) {
-        const previous = node.statements[index - 1];
-        if (ts.isReturnStatement(previous) || ts.isThrowStatement(previous) || ts.isBreakStatement(previous) || ts.isContinueStatement(previous)) {
-          add(lineAt(node.statements[index].getStart(source)), 'correctness', 'unreachable-code', 4, '前一条语句已终止当前控制流，后续代码不可达');
-          break;
-        }
-      }
+      if (!statements.length) add(lineAt(node.getStart(source)), 'consistency', 'swallowed-error', 2, '空 catch 块没有说明忽略异常的意图，失败处理写法不清晰');
     }
     ts.forEachChild(node, visit);
   }
   visit(source);
-  return findings;
-}
-
-function isNullishLiteral(node: Ts.Node): boolean {
-  return node.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === 'undefined');
+  return { findings, parseFailed: false };
 }
 
 function isFunction(node: Ts.Node): boolean {

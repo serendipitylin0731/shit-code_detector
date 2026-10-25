@@ -4,9 +4,9 @@
 
 作者：**_serendipity**
 
-Shit Code Detector 是一个 VS Code 插件。它先累计内部问题分，再通过[五段转换函数](SCORING.md)输出 **0–9 分**的“shit 分”：越接近 9，代码问题越严重。支持当前项目、编辑器中正在打开的单个文件，以及 HTTPS Git 仓库。默认在本地运行确定性规则；保存 AI Key 后，可用 DeepSeek 等兼容 Chat Completions 的 API 按固定 A–E 评分表补充语义和架构审查。质量维度参考 [Done-0/fuck-u-code](https://github.com/Done-0/fuck-u-code)，具体取舍见 [REFERENCE.md](REFERENCE.md)。
+Shit Code Detector 是一个 VS Code 代码风格评分插件。它先累计写法与结构问题，再通过[五段转换函数](SCORING.md)输出 **0–9 分**的“shit 分”：越接近 9，代码写法与结构问题越多。支持当前项目、编辑器中正在打开的单个文件，以及 HTTPS Git 仓库。默认在本地运行确定性规则；保存 AI Key 后，可用 DeepSeek 等兼容 Chat Completions 的 API 按固定 A–E 评分表补充风格与架构审查。质量维度参考 [Done-0/fuck-u-code](https://github.com/Done-0/fuck-u-code)，具体取舍见 [REFERENCE.md](REFERENCE.md)。
 
-评分回归使用仓库内可重复的好、中、差三档样本；真实项目补充验证使用 [psf/requests](https://github.com/psf/requests)。测试数据和结果见 [VALIDATION.md](VALIDATION.md)。
+评分回归使用仓库内可重复的好、中、差三档样本，并另行检查长分支、适度重复和同一职责的顺序步骤。测试数据和结果见 [VALIDATION.md](VALIDATION.md)。
 
 ## 功能
 
@@ -14,10 +14,10 @@ Shit Code Detector 是一个 VS Code 插件。它先累计内部问题分，再�
 - **评分当前项目**：从当前项目根目录读取代码；多根工作区使用第一个根目录，参与文件由该目录的规则文件决定。
 - **评分当前文件**：直接分析编辑器里当前停留的单个代码文件，包括未保存修改；无需文件选择对话框。
 - **评分 HTTPS Git 仓库**：切换到 Git 仓库页后输入地址，可导入一份本地 `.shitcode` 或 `.shitcode_ignore` 筛选仓库文件；浅克隆到临时目录，扫描后删除，不执行仓库代码。
-- **本地静态分析**：检查运算符空格、注释格式、圈复杂度、认知复杂度、控制流嵌套、不可达代码、重复代码、循环依赖、异常处理、C/C++ 宏风险，以及 Python/JS/TS 的可确定语法与运行异常。格式分设聚合上限；文件长度、目录文件数和 `tmp` 等名称不单独判定代码质量。
+- **本地风格分析**：检查运算符空格、注释格式、圈复杂度、认知复杂度、控制流嵌套、重复代码、循环依赖、异常处理写法及 C/C++ 宏的可读性。语法解析只用于确定检查覆盖范围；语法错误、运行异常、输入安全和程序结果均不计分。
 - **大项目可响应**：本地解析与评分在工作线程运行，可取消，不阻塞 VS Code 扩展主线程。
 - **根目录评分配置**：当前项目和单文件使用 `.shitcode` 允许列表或 `.shitcode_ignore` 排除列表；两者同时存在时只读取 `.shitcode`。路径写法、通配符、注释和 `!` 否定规则与 `.gitignore` 一致。`.gitignore` 本身不再决定文件是否参与评分。
-- **可选 AI 审查**：预先固定 8 个文件条目和 6 个项目条目，覆盖可见边界、资源、失败处理、性能、架构与安全；不猜测未知业务逻辑的正确性。每项给 A–E、N/A 或 U；A 为零分，B–E 按基础分乘固定权重，U 表示未完成。Key 保存在 VS Code SecretStorage，保存后每次评分自动调用 AI；报告列出每项等级、证据与覆盖数。完整标准见 [AI_RUBRIC.md](AI_RUBRIC.md)。
+- **可选 AI 审查**：预先固定 8 个文件条目和 3 个项目条目，重点评价抽象恰当性、局部可理解性、控制流和表达简洁性，也检查命名、内聚、必要的去重与写法一致性。清晰的长分支、适度重复和合理的顺序步骤可以得 A；不强求映射表、依赖注入或特定设计模式。程序是否正确、是否安全、资源释放及性能不参与评分。每项给 A–E、N/A 或 U；A 为零分，B–E 按基础分乘固定权重，U 表示未完成。完整标准见 [AI_RUBRIC.md](AI_RUBRIC.md)。
 - **手动 void**：对有分数的 AI 分项或具体问题点击“void”，条目立即置灰并移动到所在列表底部，综合分、问题密度、报告和 JSON 同步更新；可点击“恢复计分”撤销。本次评分的 void 状态在重新评分时重置。
 - **逐项可追溯**：Markdown 报告列出分类、文件问题数及所有问题的严重程度；可导出不含完整源文件与 API 配置的 JSON 报告。问题说明可能引用短代码片段。
 
@@ -25,7 +25,7 @@ Shit Code Detector 是一个 VS Code 插件。它先累计内部问题分，再�
 
 ## 安装与运行
 
-需要 Node.js 20+、Git、VS Code 1.106+。如需 Python 语法、运算符与明显异常检查，还需本机 Python 3；没有 Python 时插件仍可运行其他规则，并在报告显示解析覆盖数。
+需要 Node.js 20+、Git、VS Code 1.106+。如需 Python 语法解析、运算符与复杂度检查，还需本机 Python 3；没有 Python 时插件仍可运行其他规则，并在报告显示解析覆盖数。
 
 ```bash
 npm install
@@ -73,6 +73,8 @@ dist/
 
 开发者可用环境变量 `DEEPSEEK_API_KEY` 运行 `npm run test:ai`，也可继续使用本仓库已有的、被 Git 忽略的 `ai.local.json` 作为测试脚本的 Key 来源；环境变量优先，可选设置 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL`。该文件只供开发测试脚本读取，插件不会读取或创建它。这是显式调用真实 API 的测试，会产生 API 请求；普通 `npm test` 不调用网络 AI。
 
+`npm run test:ai:style` 用真实 API 额外检查长 if-else、同一职责的顺序步骤、保留局部重复和过度封装四个对照样例。
+
 评分时，代码片段会发送到配置的 HTTPS API。默认模型为 `deepseek-flash`，这是 [DeepSeek 当前推荐的 Flash API 名称](https://api-docs.deepseek.com/updates/)；使用其他兼容服务时可在设置中改模型与地址。旧版 `ai.local.json` 不再用于插件配置，也不会作为代码扫描。没有保存 Key 或请求失败时，报告保留本地分数并说明原因。
 
 AI 对收集到的所有有效代码逐片送审。请求分片大小仅控制单次请求，不限制项目总量：
@@ -84,11 +86,11 @@ AI 对收集到的所有有效代码逐片送审。请求分片大小仅控制�
 
 文件级 AI 请求最多同时进行两次；项目级审查也将全部代码分批送审，依据真实代码判断架构；跨批关系证据不足时给 U。报告分别显示收到 AI 响应的文件与字符数、全部条目完成分级的文件数，以及失败项。大项目会产生较多 API 请求、耗时与费用；请求失败或用户取消后不会把未审查代码记成 A。不同模型可能得到不同的 AI 分数。
 
-从 v0.8.0 起，旧的 `ai.maxFiles`、`ai.maxCharsPerFile` 和 `ai.maxTotalChars` 设置不再生效；如需调整单次请求大小，请使用 `ai.maxCharsPerRequest`。v0.8.1 修复了 HTTPS 代理环境中的 AI 请求，并让项目级审查也接收全部代码。v0.9.0 收紧 AI 判断依据，并加入本轮评分结果的手动 void。
+从 v0.8.0 起，旧的 `ai.maxFiles`、`ai.maxCharsPerFile` 和 `ai.maxTotalChars` 设置不再生效；如需调整单次请求大小，请使用 `ai.maxCharsPerRequest`。v1.0.0 将评分范围收敛为代码风格与架构写法，统一按每 1000 行有效代码折算内部总分，重点评价抽象与局部可理解性；保留手动 void。
 
 ## 评分与限制
 
-详见 [SCORING.md](SCORING.md)、[AI_RUBRIC.md](AI_RUBRIC.md) 和 [DESIGN.md](DESIGN.md)。内部原始分按类别聚合；本地维护性提示按规模平滑，确定的正确性与安全问题及 AI 条目保持原权重；最终分经公式映射到 0–9。侧边栏另列高风险状态、问题密度、各类问题数及 Git 增量。比较不同规模项目时，应同时看这些指标与扫描覆盖数。规则为启发式分析，不替代语言专用 linter 或人工代码审查。
+详见 [SCORING.md](SCORING.md)、[AI_RUBRIC.md](AI_RUBRIC.md) 和 [DESIGN.md](DESIGN.md)。本地与 AI 分数统一乘以 `1000 / max(有效代码行数, 1000)`，本地类别再应用聚合上限，最后经五段函数映射到 0–9。小项目不会因分母太小而被放大；大项目按问题比例比较。侧边栏另列每千行问题数、各类问题数及 Git 增量。插件只给写法和结构评分，不应把分数当作程序正确性、安全性或性能结论。
 
 ```bash
 npm test

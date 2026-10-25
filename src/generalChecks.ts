@@ -44,13 +44,13 @@ function inspectMacro(line: string, lineNumber: number, add: (line: number, cate
   const body = rawBody.replace(/\\\s*$/, '').trim();
   const cleanBody = maskLine(body, false).code.trim();
   if (/^(?:int|long|short|float|double|char|bool|true|false|return|class|struct|private|public)$/.test(name)) {
-    add(lineNumber, 'correctness', 'macro-keyword', 6, `宏“${name}”替换语言关键字或基础类型，可能改变大量代码的含义`);
+    add(lineNumber, 'readability', 'macro-keyword', 4, `宏“${name}”复用语言关键字或基础类型名称，阅读和维护时难以区分`);
   }
   if (!body) return;
-  if (/;\s*$/.test(cleanBody) && !/^do\s*\{/.test(cleanBody)) add(lineNumber, 'correctness', 'macro-semicolon', 2, `宏“${name}”末尾带分号，作为表达式使用时容易改变语句结构`);
+  if (/;\s*$/.test(cleanBody) && !/^do\s*\{/.test(cleanBody)) add(lineNumber, 'readability', 'macro-semicolon', 2, `宏“${name}”内部带末尾分号，调用处的语句形态不直观`);
   const expression = /[+*/%&|^?:<>-]/.test(cleanBody) && !/^do\s*\{/.test(cleanBody);
   if (expression && !(cleanBody.startsWith('(') && cleanBody.endsWith(')'))) {
-    add(lineNumber, 'correctness', 'macro-expression-parens', 3, `宏“${name}”的表达式未整体加括号，可能产生优先级错误`);
+    add(lineNumber, 'readability', 'macro-expression-parens', 2, `宏“${name}”的表达式未整体加括号，展开结构不直观`);
   }
   if (parameters === undefined) return;
   const names = parameters.split(',').map(value => value.trim()).filter(value => /^[A-Za-z_]\w*$/.test(value));
@@ -60,9 +60,9 @@ function inspectMacro(line: string, lineNumber: number, add: (line: number, cate
       const index = found.index;
       return cleanBody[index - 1] !== '(' || cleanBody[index + parameter.length] !== ')';
     })) {
-      add(lineNumber, 'correctness', 'macro-argument-parens', 3, `宏“${name}”的参数“${parameter}”未逐处加括号，传入表达式时可能改变优先级`);
+      add(lineNumber, 'readability', 'macro-argument-parens', 2, `宏“${name}”的参数“${parameter}”未逐处加括号，展开结构不直观`);
     }
-    if (occurrences.length > 1) add(lineNumber, 'correctness', 'macro-repeat-argument', 2, `宏“${name}”多次展开参数“${parameter}”，传入带副作用的表达式时可能重复求值`);
+    if (occurrences.length > 1) add(lineNumber, 'readability', 'macro-repeat-argument', 2, `宏“${name}”多次展开参数“${parameter}”，调用处不易看出展开次数`);
   }
 }
 

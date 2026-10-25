@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { analyze, CodeFile, languageOf } from '../src/analysis';
+import { analyze, CodeFile, languageOf, lengthFactor } from '../src/analysis';
 
 const file = (name: string, content: string): CodeFile => ({ path: name, language: languageOf(name)!, content });
 
@@ -57,4 +57,19 @@ test('测试文件长度不计作生产架构问题', () => {
   const long = Array.from({ length: 1000 }, () => 'assert True').join('\n');
   const result = analyze([file('tests/test_feature.py', long)]);
   assert.ok(!result.findings.some(f => f.rule === 'large-file'));
+});
+
+test('同样的问题比例在 1000 行和 10000 行项目得到统一的长度标准化分', () => {
+  const content = Array.from({ length: 1000 }, (_, index) => index < 100 ? `int value_${index}=1;` : `int value_${index} = 1;`).join('\n');
+  const smallFiles = [file('part_0.cpp', content)];
+  const largeFiles = Array.from({ length: 10 }, (_, index) => file(`part_${index}.cpp`, content));
+  const ai = (files: CodeFile[]) => files.map(item => ({ path: item.path, line: 1, category: 'architecture' as const,
+    rule: 'ai-abstraction_fit', points: 10, message: '同类抽象写法问题', source: 'ai' as const }));
+  const small = analyze(smallFiles, ai(smallFiles), false);
+  const large = analyze(largeFiles, ai(largeFiles), false);
+  assert.equal(lengthFactor(smallFiles), 1);
+  assert.equal(lengthFactor(largeFiles), 0.1);
+  assert.ok(Math.abs(small.score - large.score) < 1e-9);
+  assert.ok(Math.abs(small.categoryScores.style - large.categoryScores.style) < 1e-9);
+  assert.ok(Math.abs(small.categoryScores.architecture - large.categoryScores.architecture) < 1e-9);
 });

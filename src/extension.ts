@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import path from 'node:path';
-import { CodeFile, Finding, mergeAnalysis } from './analysis';
+import { CodeFile, Finding, mergeAnalysis, REFERENCE_CODE_LINES } from './analysis';
 import { analyzeInWorker } from './analyzeAsync';
 import { AiResult, analyzeWithAi } from './ai';
 import { AI_BASE_POINTS, AI_CRITERIA, AI_RUBRIC_VERSION } from './aiRubric';
@@ -121,7 +121,8 @@ export function activate(context: vscode.ExtensionContext): void {
           const allFindings = fullResult.findings;
           latestReport = makeReport(label, scope, scored.score, scored.categoryScores, scored.findings, collection.files,
             collection.skipped, scored.checkCoverage, aiEnabled, ai, metrics, baseline, allFindings, voided);
-          latestJson = JSON.stringify({ schemaVersion: 9, target: label, scope, score: finalScore(scored.score), rawScore: scored.score,
+          latestJson = JSON.stringify({ schemaVersion: 11, target: label, scope, score: finalScore(scored.score), rawScore: scored.score,
+            referenceCodeLines: REFERENCE_CODE_LINES, effectiveCodeLines: metrics.effectiveLines,
             scoreFormula: SCORE_FORMULA, fileCount: collection.files.length, categoryContributions: scored.categoryScores,
             metrics, voidedJudgments: [...voided],
             baseline: baseline ? { available: baseline.baselineAvailable, changedPaths: baseline.changedPaths, introduced: baseline.introduced.map(({ points, ...finding }) => finding), note: baseline.note } : undefined,
@@ -138,7 +139,7 @@ export function activate(context: vscode.ExtensionContext): void {
               errors: ai?.errors ?? [] } }, null, 2) + '\n';
           const dashboard: DashboardResult = {
             id: ++reportId, label, scope, score: finalScore(scored.score), scoreDisplay: formattedFinalScore(scored.score), fileCount: collection.files.length,
-            density: metrics.issueDensity.toFixed(1) + ' / 千行', highRisk: metrics.highRisk, voidedCount: voided.size,
+            density: metrics.issueDensity.toFixed(1) + ' / 千行', voidedCount: voided.size,
             baseline: baseline?.baselineAvailable ? `${baseline.changedPaths.length} 个变更文件，${baseline.introduced.length} 条新增本地问题` : baseline?.note,
             skipped: `不支持 ${collection.skipped.unsupported} / 超大 ${collection.skipped.large} / 二进制 ${collection.skipped.binary} / 读取失败 ${collection.skipped.unreadable}`,
             checks: scored.checkCoverage,
@@ -267,8 +268,8 @@ function makeReport(label: string, scope: Scope, rawScore: number, categoryScore
     `- 对象：${clean(label)}`,
     `- 模式：${scope === 'workspace' ? '当前项目' : scope === 'files' ? '当前文件' : 'HTTPS Git 仓库'}`,
     `- 最终分：**${formattedFinalScore(rawScore)} / 9**（越高越 shit）`,
-    `- 问题密度：${metrics.issueDensity.toFixed(1)} / 千行有效代码（小项目按 200 行平滑）`,
-    `- 高风险状态：${metrics.highRisk ? '发现静态确认的高风险正确性或安全问题' : '未发现静态确认的高风险问题'}`,
+    `- 长度基准：${REFERENCE_CODE_LINES} 行有效代码；原始分统一乘以 ${REFERENCE_CODE_LINES} / max(有效行数, ${REFERENCE_CODE_LINES})`,
+    `- 问题密度：${metrics.issueDensity.toFixed(1)} 条 / 千行有效代码（不足 ${REFERENCE_CODE_LINES} 行按 ${REFERENCE_CODE_LINES} 行计算）`,
     `- 已分析：${files.length} 个代码文件`,
     `- 手动 void：${voided.size} 个判断条目（不计入当前分数）`,
     `- 跳过：不支持或生成文件 ${skipped.unsupported}，超大文件 ${skipped.large}，二进制 ${skipped.binary}，读取失败 ${skipped.unreadable}`,
@@ -282,8 +283,8 @@ function makeReport(label: string, scope: Scope, rawScore: number, categoryScore
     ...(baseline?.introduced.length ? ['', '| 严重程度 | 位置 | 说明 |', '| --- | --- | --- |',
       ...baseline.introduced.map(item => `| ${severity(item)} | ${clean(item.path)}${item.line ? `:${item.line}` : ''} | ${clean(item.message)} |`)] : []),
     '', '## 分类问题数', '',
-    '| 架构 | 复杂度 | 重复 | 风格 | 命名 | 可读性 | 一致性 | 正确性 | 安全 |', '| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
-    `| ${categoryCounts.architecture} | ${categoryCounts.complexity} | ${categoryCounts.duplication} | ${categoryCounts.style} | ${categoryCounts.naming} | ${categoryCounts.readability} | ${categoryCounts.consistency} | ${categoryCounts.correctness} | ${categoryCounts.security} |`,
+    '| 架构 | 复杂度 | 重复 | 风格 | 命名 | 可读性 | 一致性 |', '| ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    `| ${categoryCounts.architecture} | ${categoryCounts.complexity} | ${categoryCounts.duplication} | ${categoryCounts.style} | ${categoryCounts.naming} | ${categoryCounts.readability} | ${categoryCounts.consistency} |`,
     '', '## AI 分项评分', '',
     `评分表版本：${AI_RUBRIC_VERSION}。等级基础分：${Object.entries(AI_BASE_POINTS).map(([grade, points]) => `${grade}=${points}`).join('、')}；内部按基础分 × 固定权重累计。`, '',
     '| 条目 | 范围 | 类别 | 权重 |', '| --- | --- | --- | ---: |',
@@ -314,6 +315,6 @@ function makeReport(label: string, scope: Scope, rawScore: number, categoryScore
     }
   }
   if (ai?.errors.length) lines.push('', '## AI 未完成项', '', ...ai.errors.map(error => `- ${clean(error)}`));
-  lines.push('', '## 评分说明', '', '内部累计值 x = 本地规则分类聚合值（维护性信号含规模平滑，各类上限和系数见 SCORING.md）+ Σ（有效 AI 分项基础分 × 固定条目权重）。手动 void 的本地问题按原类别贡献比例扣除；void 的 AI 条目整体不计分。最终分按 `SCORING.md` 中的五段函数转换，断点为 0.1、45、150、250。A 不计分；U 表示未审查完成，N/A 表示不适用。静态规则匹配不等于运行测试。详见 `SCORING.md` 与 `AI_RUBRIC.md`。', '');
+  lines.push('', '## 评分说明', '', `内部累计值 x：本地与 AI 先统一乘 ${REFERENCE_CODE_LINES} / max(有效代码行数, ${REFERENCE_CODE_LINES})；本地类别再应用各自上限与系数，AI 条目按基础分 × 固定权重计入。手动 void 的本地问题按原类别贡献比例扣除；void 的 AI 条目整体不计分。最终分按 SCORING.md 中的五段函数转换，断点为 0.1、45、150、250。A 不计分；U 表示未审查完成，N/A 表示不适用。代码风格评分不判断运行结果。详见 SCORING.md 与 AI_RUBRIC.md。`, '');
   return lines.join('\n');
 }

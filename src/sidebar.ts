@@ -12,7 +12,6 @@ export interface DashboardResult {
   scoreDisplay: string;
   voidedCount: number;
   density: string;
-  highRisk: boolean;
   baseline?: string;
   fileCount: number;
   skipped: string;
@@ -105,7 +104,6 @@ function html(webview: vscode.Webview, logoUrl: string): string {
   .score { font-size: 49px; line-height: 1.05; font-weight: 760; font-variant-numeric: tabular-nums; margin: 4px 0; letter-spacing: -.04em; }
   .score[data-tone="good"] { color: #65c99d; } .score[data-tone="watch"] { color: #f0b465; } .score[data-tone="bad"] { color: #f27d79; }
   .hint, .meta { color: var(--vscode-descriptionForeground); line-height: 1.45; overflow-wrap: anywhere; }
-  .risk { color: #d94b54; font-weight: 700; margin-top: 4px; }
   .score-line { display: flex; align-items: baseline; gap: 8px; }
   .score-line span { color: var(--vscode-descriptionForeground); font-size: 13px; }
   .section { margin-top: 12px; padding: 13px; border: 1px solid var(--vscode-panel-border); border-radius: 11px; background: var(--vscode-editorWidget-background); }
@@ -154,11 +152,11 @@ function html(webview: vscode.Webview, logoUrl: string): string {
   .pager { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 12px; }
   .pager button { padding: 4px 7px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 0; border-radius: 3px; }
 </style></head><body>
-<div class="score-panel"><div class="brand"><img src="${logoUrl}" alt="Shit Code Detector 标志"><div class="brand-copy"><div class="brand-title">Shit Code Detector</div><div class="brand-sub">代码质量雷达</div></div><button class="icon-button" id="settingsToggle" type="button" aria-label="打开设置" title="设置" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8.8a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4Z" stroke="currentColor" stroke-width="1.7"/><path d="m10.4 2.8-.5 1.7a8 8 0 0 0-1.7.9L6.5 5l-2 2 1 1.7a8 8 0 0 0-.8 1.7l-1.9.5v2.8l1.9.5a8 8 0 0 0 .8 1.7l-1 1.7 2 2 1.7-1a8 8 0 0 0 1.7.8l.5 1.9h2.8l.5-1.9a8 8 0 0 0 1.7-.8l1.7 1 2-2-1-1.7a8 8 0 0 0 .8-1.7l1.9-.5v-2.8l-1.9-.5a8 8 0 0 0-.8-1.7l1-1.7-2-2-1.7 1a8 8 0 0 0-1.7-.8l-.5-1.9h-2.8Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></button></div><div class="eyebrow" style="margin-top: 11px">综合评分</div><div class="score-line"><div class="score" id="score">—</div><span>/ 9</span></div><div class="meta" id="summary">选择对象后开始评分</div><div class="risk" id="risk"></div></div>
+<div class="score-panel"><div class="brand"><img src="${logoUrl}" alt="Shit Code Detector 标志"><div class="brand-copy"><div class="brand-title">Shit Code Detector</div><div class="brand-sub">代码风格雷达</div></div><button class="icon-button" id="settingsToggle" type="button" aria-label="打开设置" title="设置" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8.8a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4Z" stroke="currentColor" stroke-width="1.7"/><path d="m10.4 2.8-.5 1.7a8 8 0 0 0-1.7.9L6.5 5l-2 2 1 1.7a8 8 0 0 0-.8 1.7l-1.9.5v2.8l1.9.5a8 8 0 0 0 .8 1.7l-1 1.7 2 2 1.7-1a8 8 0 0 0 1.7.8l.5 1.9h2.8l.5-1.9a8 8 0 0 0 1.7-.8l1.7 1 2-2-1-1.7a8 8 0 0 0 .8-1.7l1.9-.5v-2.8l-1.9-.5a8 8 0 0 0-.8-1.7l1-1.7-2-2-1.7 1a8 8 0 0 0-1.7-.8l-.5-1.9h-2.8Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></button></div><div class="eyebrow" style="margin-top: 11px">综合评分</div><div class="score-line"><div class="score" id="score">—</div><span>/ 9</span></div><div class="meta" id="summary">选择对象后开始评分</div></div>
 <section class="section" id="settingsPanel" hidden><div class="settings-heading"><h2>AI 设置</h2><span class="hint">保密存储</span></div><div class="hint" id="apiKeyStatus">未配置 Key：只运行本地规则。</div><button class="action secondary" id="setApiKey">保存或更换 API Key</button><button class="action secondary" id="openSettings">调整模型与 API 地址</button></section>
 <section class="section"><h2>评分对象</h2><div class="target-switch" role="group" aria-label="评分目标"><button id="targetRoot" type="button" aria-pressed="true">当前项目</button><button id="targetFile" type="button" aria-pressed="false">单文件</button><button id="targetRepository" type="button" aria-pressed="false">Git 仓库</button></div><div id="rootControls"><div class="target-note">从当前项目根目录读取待评分代码。</div><button class="action" id="scanWorkspace">评分当前项目</button></div><div id="fileControls" hidden><div class="target-note" id="activeFileName">先在编辑器中打开代码文件。</div><button class="action" id="scanFiles">评分当前文件</button></div><div id="repositoryControls" hidden><input class="field" id="repoUrl" type="url" placeholder="https://github.com/owner/repo.git" aria-label="Git 仓库 HTTPS 地址"><div class="row"><button class="action secondary" id="importRepositoryConfig">导入评分规则…</button><button class="action secondary" id="clearRepositoryConfig" hidden>清除规则</button></div><div class="hint" id="repositoryConfigStatus">未导入规则：扫描仓库中的有效代码。</div><button class="action" id="scanRepository">评分 Git 仓库</button></div></section>
 <div class="status" id="status" role="status"></div>
-<section class="section" id="results" hidden><div class="chips" id="categories"></div><h2>问题最多的文件</h2><div id="fileRanking"></div><details id="aiDetails"><summary id="aiGradeTitle">AI 分项等级</summary><div class="hint">固定条目按 A–E、N/A、U 分级；权重与公式见评分文档。</div><div id="aiAssessmentList"></div></details><div class="list-head"><h2 id="findingTitle">具体问题</h2><div><button class="open" id="openReport">Markdown 报告</button> · <button class="open" id="exportJson">导出 JSON</button></div></div><select class="field" id="fileFilter" aria-label="筛选文件"><option value="all">全部文件</option></select><select class="field" id="categoryFilter" aria-label="筛选类别"><option value="all">全部类别</option><option value="architecture">架构</option><option value="style">风格</option><option value="naming">命名</option><option value="readability">可读性</option><option value="complexity">复杂度</option><option value="duplication">重复</option><option value="consistency">一致性</option><option value="correctness">正确性</option><option value="security">安全</option></select><div class="hint" id="coverage"></div><div id="findingList"></div><div class="pager"><button id="previous">上一页</button><span id="pageLabel"></span><button id="next">下一页</button></div></section>
+<section class="section" id="results" hidden><div class="chips" id="categories"></div><h2>问题最多的文件</h2><div id="fileRanking"></div><details id="aiDetails"><summary id="aiGradeTitle">AI 分项等级</summary><div class="hint">固定条目按 A–E、N/A、U 分级；权重与公式见评分文档。</div><div id="aiAssessmentList"></div></details><div class="list-head"><h2 id="findingTitle">具体问题</h2><div><button class="open" id="openReport">Markdown 报告</button> · <button class="open" id="exportJson">导出 JSON</button></div></div><select class="field" id="fileFilter" aria-label="筛选文件"><option value="all">全部文件</option></select><select class="field" id="categoryFilter" aria-label="筛选类别"><option value="all">全部类别</option><option value="architecture">架构</option><option value="style">风格</option><option value="naming">命名</option><option value="readability">可读性</option><option value="complexity">复杂度</option><option value="duplication">重复</option><option value="consistency">一致性</option></select><div class="hint" id="coverage"></div><div id="findingList"></div><div class="pager"><button id="previous">上一页</button><span id="pageLabel"></span><button id="next">下一页</button></div></section>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const $ = id => document.getElementById(id);
@@ -167,7 +165,7 @@ function html(webview: vscode.Webview, logoUrl: string): string {
   let targetMode = ['root', 'file', 'repository'].includes(savedState.targetMode) ? savedState.targetMode : 'root';
   let settingsOpen = Boolean(savedState.settingsOpen);
   const pageSize = 100;
-  const categoryNames = { architecture: '架构', style: '风格', naming: '命名', readability: '可读性', complexity: '复杂度', duplication: '重复', consistency: '一致性', correctness: '正确性', security: '安全' };
+  const categoryNames = { architecture: '架构', style: '风格', naming: '命名', readability: '可读性', complexity: '复杂度', duplication: '重复', consistency: '一致性' };
   const severityNames = { low: '轻微', medium: '一般', high: '较重', critical: '严重' };
   const gradeSeverity = { A: '无问题', B: '轻微', C: '一般', D: '较重', E: '严重', 'N/A': '不适用', U: '未完成' };
   function send(action, extras) { vscode.postMessage(Object.assign({ action }, extras || {})); }
@@ -245,7 +243,6 @@ function html(webview: vscode.Webview, logoUrl: string): string {
       $('score').textContent = current.scoreDisplay;
       $('score').dataset.tone = current.score < 3 ? 'good' : current.score < 6 ? 'watch' : 'bad';
       $('summary').textContent = current.label + ' · ' + current.fileCount + ' 个文件 · 问题密度 ' + current.density + (current.voidedCount ? ' · 已 void ' + current.voidedCount + ' 项' : '');
-      $('risk').textContent = current.highRisk ? '⚠ 已发现静态确认的高风险正确性或安全问题' : '';
       $('results').hidden = false;
       $('coverage').textContent = '跳过：' + current.skipped + ' · 解析：' + current.checks + ' · AI：' + current.ai;
       if (current.baseline) $('coverage').textContent += ' · Git 增量：' + current.baseline;

@@ -62,9 +62,9 @@ export const qualityCases: { name: string; files: CodeFile[] }[] = [
       code('src/unsafe.ts', 'TypeScript', [
         "import { helper } from './dependency';",
         'export function run(): number {',
-        '  null.value;',
-        '  JSON.parse("{bad}");',
-        '  try { throw new Error("boom"); } catch (error) {}',
+        '  const first=helper();',
+        '  const second=first+1;',
+        '  try { return second; } catch (error) {}',
         '  return helper();',
         '}'
       ].join('\n')),

@@ -4,7 +4,7 @@ import { inspectPython } from './pythonChecks';
 import { inspectTypeScript } from './tsChecks';
 import { inspectDuplication, inspectImportCycles } from './projectChecks';
 
-export type Category = 'style' | 'naming' | 'readability' | 'complexity' | 'duplication' | 'consistency' | 'architecture' | 'correctness' | 'security';
+export type Category = 'style' | 'naming' | 'readability' | 'complexity' | 'duplication' | 'consistency' | 'architecture';
 
 export interface CodeFile {
   path: string;
@@ -32,6 +32,7 @@ export interface Analysis {
   score: number;
   categoryScores: Record<Category, number>;
   checkCoverage: string;
+  parseFailurePaths?: string[];
 }
 
 /** Local heuristic signals have different reliability and cannot grow equally without bound. */
@@ -42,10 +43,20 @@ export const LOCAL_CATEGORY_POLICY: Readonly<Record<Category, { cap: number; mul
   readability: { cap: 50, multiplier: 0.75 },
   complexity: { cap: 60, multiplier: 0.6 },
   duplication: { cap: 40, multiplier: 0.75 },
-  architecture: { cap: Infinity, multiplier: 1 },
-  correctness: { cap: Infinity, multiplier: 1 },
-  security: { cap: Infinity, multiplier: 1 }
+  architecture: { cap: Infinity, multiplier: 1 }
 };
+
+/** All score sources share one reference size; short files are never amplified. */
+export const REFERENCE_CODE_LINES = 1000;
+const hashCommentLanguages = new Set(['Python', 'Shell', 'Ruby', 'Perl', 'R', 'YAML', 'TOML', 'PowerShell', 'Julia', 'Dockerfile', 'Makefile', 'Terraform']);
+export function effectiveCodeLines(files: readonly CodeFile[]): number {
+  return files.reduce((total, file) => total + file.content.split(/\r?\n/)
+    .filter(line => line.trim() && !/^\s*(?:\/\/|\/\*|<!--|\*(?:\s|\/|$))/.test(line) &&
+      !(hashCommentLanguages.has(file.language) && /^\s*#/.test(line))).length, 0);
+}
+export function lengthFactor(files: readonly CodeFile[]): number {
+  return REFERENCE_CODE_LINES / Math.max(REFERENCE_CODE_LINES, effectiveCodeLines(files));
+}
 
 const languageByExtension: Record<string, string> = {
   '.py': 'Python', '.pyi': 'Python', '.js': 'JavaScript', '.jsx': 'JavaScript',
@@ -90,6 +101,7 @@ export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = 
   const indentByLanguage = new Map<string, { tabs: CodeFile[]; spaces: CodeFile[] }>();
   let jsTsChecked = 0;
   let jsonChecked = 0;
+  const parseFailurePaths: string[] = [];
   for (const file of files) {
     const lines = file.content.split(/\r?\n/);
     const nonblank = lines.filter(line => line.trim().length > 0);
@@ -109,13 +121,15 @@ export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = 
 
     findings.push(...inspectGeneral(file));
     if (file.language === 'TypeScript' || file.language === 'JavaScript') {
-      findings.push(...inspectTypeScript(file));
+      const checked = inspectTypeScript(file);
+      findings.push(...checked.findings);
+      if (checked.parseFailed) parseFailurePaths.push(file.path);
       jsTsChecked++;
     }
     if (file.language === 'JSON' && !/(?:^|\/)(?:tsconfig|jsconfig|settings|launch|tasks)\b/i.test(file.path)) {
       jsonChecked++;
       try { JSON.parse(file.content); }
-      catch { add(file.path, undefined, 'correctness', 'syntax-error', 5, 'JSON 语法无效，按严格 JSON 读取时会失败'); }
+      catch { parseFailurePaths.push(file.path); }
     }
 
     let blankRun = 0;
@@ -146,37 +160,33 @@ export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = 
   const pythonFiles = files.filter(file => file.language === 'Python');
   const python = inspectPython(pythonFiles);
   findings.push(...python.findings);
+  parseFailurePaths.push(...python.parseFailurePaths);
   findings.push(...inspectDuplication(files));
   if (projectMode) findings.push(...inspectImportCycles(files));
-  const syntaxFailureFiles = new Set(findings.filter(finding => finding.rule === 'syntax-error').map(finding => finding.path)).size;
-  const checkCoverage = `JS/TS AST ${jsTsChecked} 个、Python AST ${python.checked}/${pythonFiles.length} 个、严格 JSON ${jsonChecked} 个、语法解析失败 ${syntaxFailureFiles} 个文件${python.note ? `；${python.note}` : ''}`;
+  const checkCoverage = `JS/TS AST ${jsTsChecked} 个、Python AST ${python.checked}/${pythonFiles.length} 个、严格 JSON ${jsonChecked} 个、解析失败 ${parseFailurePaths.length} 个文件（只影响检查覆盖，不计分）${python.note ? `；${python.note}` : ''}`;
 
-  return finalize(files, [...findings, ...extra], checkCoverage);
+  return finalize(files, [...findings, ...extra], checkCoverage, parseFailurePaths);
 }
 
 export function mergeAnalysis(base: Analysis, extra: Finding[]): Analysis {
-  return finalize(base.files, [...base.findings, ...extra], base.checkCoverage);
+  return finalize(base.files, [...base.findings, ...extra], base.checkCoverage, base.parseFailurePaths);
 }
 
-function finalize(files: CodeFile[], merged: Finding[], checkCoverage: string): Analysis {
-  const confirmed = new Set(['syntax-error', 'zero-division', 'none-dereference', 'empty-index', 'null-dereference', 'null-call', 'invalid-json-parse', 'unreachable-code']);
+function finalize(files: CodeFile[], merged: Finding[], checkCoverage: string, parseFailurePaths: string[] = []): Analysis {
   for (const finding of merged) {
     finding.evidenceType ??= finding.source === 'ai' ? 'ai-inference' : 'static-confirmed';
-    finding.confidence ??= finding.source === 'ai' ? 'medium' : confirmed.has(finding.rule) ? 'high' : 'medium';
+    finding.confidence ??= 'medium';
   }
-  const categoryScores: Record<Category, number> = { style: 0, naming: 0, readability: 0, complexity: 0, duplication: 0, consistency: 0, architecture: 0, correctness: 0, security: 0 };
+  const categoryScores: Record<Category, number> = { style: 0, naming: 0, readability: 0, complexity: 0, duplication: 0, consistency: 0, architecture: 0 };
   const localTotals = { ...categoryScores };
-  const effectiveLines = files.reduce((total, file) => total + file.content.split(/\r?\n/)
-    .filter(line => line.trim() && !/^\s*(?:#|\/\/|\*|<!--)/.test(line)).length, 0);
-  const heuristicScale = Math.min(1, Math.sqrt(1000 / Math.max(effectiveLines, 1)));
+  const scale = lengthFactor(files);
   for (const finding of merged) {
-    if (finding.source === 'ai') categoryScores[finding.category] += finding.points;
+    if (finding.source === 'ai') categoryScores[finding.category] += finding.points * scale;
     else localTotals[finding.category] += finding.points;
   }
   for (const category of Object.keys(categoryScores) as Category[]) {
     const policy = LOCAL_CATEGORY_POLICY[category];
-    const scale = ['architecture', 'correctness', 'security'].includes(category) ? 1 : heuristicScale;
-    categoryScores[category] += Math.min(localTotals[category], policy.cap) * policy.multiplier * scale;
+    categoryScores[category] += Math.min(localTotals[category] * scale, policy.cap) * policy.multiplier;
   }
-  return { files, findings: merged, score: Object.values(categoryScores).reduce((sum, points) => sum + points, 0), categoryScores, checkCoverage };
+  return { files, findings: merged, score: Object.values(categoryScores).reduce((sum, points) => sum + points, 0), categoryScores, checkCoverage, parseFailurePaths };
 }

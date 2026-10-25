@@ -17,23 +17,52 @@ test('固定评分表覆盖全部条目，A–E 基础分与权重由插件计�
   assert.deepEqual(AI_BASE_POINTS, { A: 0, B: 2, C: 4, D: 6, E: 10 });
   assert.deepEqual(['A', 'B', 'C', 'D', 'E'].map(grade => gradePoints(grade as keyof typeof AI_BASE_POINTS, 2)), [0, 4, 8, 12, 20]);
   assert.equal(new Set(AI_CRITERIA.map(item => item.id)).size, AI_CRITERIA.length);
-  assert.ok(['logic_correctness', 'readability_flow', 'documentation_contract'].every(id => !AI_CRITERIA.some(item => item.id === id)));
+  assert.ok(['logic_correctness', 'readability_flow', 'documentation_contract', 'boundary_safety', 'resource_lifecycle',
+    'performance_risk', 'state_consistency', 'security_boundaries'].every(id => !AI_CRITERIA.some(item => item.id === id)));
+  assert.ok(AI_CRITERIA.every(item => !['correctness', 'security'].includes(item.category)));
   assert.ok(AI_CRITERIA.every(item => item.weight > 0 && ['A', 'B', 'C', 'D', 'E'].every(grade => item.anchors[grade as keyof typeof item.anchors])));
+  assert.equal(AI_CRITERIA.find(item => item.id === 'abstraction_fit')?.weight, 3);
+  assert.equal(AI_CRITERIA.find(item => item.id === 'local_comprehensibility')?.weight, 3);
+  assert.ok(!AI_CRITERIA.some(item => item.id === 'testability' || item.id === 'complexity_fit'));
+});
+
+test('清晰长分支、局部重复和同一目的的多个步骤不被机械扣分', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const assessments = cleanFile('style.ts');
+    const edits = [
+      { criterion: 'control_flow_clarity', reason: '第 1 行使用长 if-else 分支，缺少映射表来分发命令。' },
+      { criterion: 'semantic_duplication', reason: '第 2 行和第 3 行都调用 check()，因此存在重复。' },
+      { criterion: 'function_cohesion', reason: '第 1 行的函数先收集状态再格式化输出，包含多个步骤。' }
+    ];
+    for (const edit of edits) {
+      const index = assessments.findIndex(item => item.criterion === edit.criterion);
+      assessments[index] = { path: 'style.ts', criterion: edit.criterion, grade: 'C', line: edit.criterion === 'semantic_duplication' ? 2 : 1,
+        reason: edit.reason } as typeof assessments[number];
+    }
+    return mockResponse(assessments);
+  };
+  try {
+    const base = analyze([{ path: 'style.ts', language: 'TypeScript', content: 'function status() {\n  check();\n  check();\n}' }], [], false);
+    const result = await analyzeWithAi(base, options, false);
+    for (const criterion of ['control_flow_clarity', 'semantic_duplication', 'function_cohesion']) {
+      assert.equal(result.assessments.find(item => item.criterion === criterion)?.grade, 'U');
+    }
+    assert.equal(result.findings.length, 0);
+  } finally { globalThis.fetch = original; }
 });
 
 test('约定的空值或正常抛错不能凭缺少本地恢复流程扣分', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => {
     const assessments = cleanFile('safe.py');
-    assessments[assessments.findIndex(item => item.criterion === 'boundary_safety')] = { path: 'safe.py', criterion: 'boundary_safety', grade: 'C', line: 1,
-      reason: '第 1 行返回空值，但没有检查调用方是否能理解这个结果。' } as typeof assessments[number];
     assessments[assessments.findIndex(item => item.criterion === 'error_strategy')] = { path: 'safe.py', criterion: 'error_strategy', grade: 'C', line: 2,
       reason: '第 2 行直接抛出异常，没有在当前函数捕获并恢复。' } as typeof assessments[number];
     return mockResponse(assessments);
   };
   try {
     const result = await analyzeWithAi(analyze([source('safe.py', 'def run():\n    raise ValueError()')], [], false), options, false);
-    assert.equal(result.assessments.find(item => item.criterion === 'boundary_safety')?.grade, 'U');
+    assert.ok(!result.assessments.some(item => item.criterion === 'boundary_safety'));
     assert.equal(result.assessments.find(item => item.criterion === 'error_strategy')?.grade, 'U');
     assert.equal(result.findings.length, 0);
   } finally { globalThis.fetch = original; }
@@ -55,16 +84,16 @@ test('AI 每个条目都返回等级，A 保留零分记录，C 按基础分乘�
     assert.equal(result.reviewedFiles, 1);
     assert.equal(result.assessments.length, FILE_AI_CRITERIA.length);
     assert.equal(result.assessments.filter(item => item.grade === 'A' && item.points === 0).length, FILE_AI_CRITERIA.length - 1);
-    assert.deepEqual(result.findings.map(item => item.points), [8]);
+    assert.deepEqual(result.findings.map(item => item.points), [4]);
     assert.equal(result.assessments.find(item => item.criterion === 'function_cohesion')?.basePoints, 4);
-    assert.equal(result.assessments.find(item => item.criterion === 'function_cohesion')?.weight, 2);
+    assert.equal(result.assessments.find(item => item.criterion === 'function_cohesion')?.weight, 1);
   } finally { globalThis.fetch = original; }
 });
 
 test('范围外、缺失、重复和机械问题不会被当作有效 AI 分项', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => {
-    const assessments = cleanFile('main.py').filter(item => item.criterion !== 'performance_risk');
+    const assessments = cleanFile('main.py').filter(item => item.criterion !== 'control_flow_clarity');
     assessments.push({ path: 'main.py', criterion: 'semantic_naming', grade: 'B', line: 2,
       reason: '第 2 行混用 Tab 和空格缩进，影响代码可读性。' } as typeof assessments[number]);
     assessments.push({ path: 'other.py', criterion: 'semantic_naming', grade: 'E', line: 1, reason: '不存在的文件不应得分。' } as typeof assessments[number]);
@@ -75,7 +104,7 @@ test('范围外、缺失、重复和机械问题不会被当作有效 AI 分项'
     const result = await analyzeWithAi(base, options, false);
     assert.equal(result.reviewedFiles, 0);
     assert.equal(result.findings.length, 0);
-    assert.equal(result.assessments.find(item => item.criterion === 'performance_risk')?.grade, 'U');
+    assert.equal(result.assessments.find(item => item.criterion === 'control_flow_clarity')?.grade, 'U');
     assert.ok(result.errors.some(error => error.includes('缺失、重复或未通过证据校验')));
   } finally { globalThis.fetch = original; }
 });
@@ -109,15 +138,15 @@ test('证据行号不可见记 U，不适用记 N/A，均不伪装为 A', async 
   const original = globalThis.fetch;
   globalThis.fetch = async () => {
     const assessments = cleanFile('sample.py');
-    assessments[assessments.findIndex(item => item.criterion === 'boundary_safety')] = { path: 'sample.py', criterion: 'boundary_safety', grade: 'D', line: 99,
-      reason: '第 99 行的可达输入导致未预期失败，调用方无法识别错误状态。' } as typeof assessments[number];
-    assessments[assessments.findIndex(item => item.criterion === 'performance_risk')] = { path: 'sample.py', criterion: 'performance_risk', grade: 'N/A', reason: '片段没有性能敏感路径。' } as typeof assessments[number];
+    assessments[assessments.findIndex(item => item.criterion === 'semantic_naming')] = { path: 'sample.py', criterion: 'semantic_naming', grade: 'D', line: 99,
+      reason: '第 99 行的主要变量名称与其用途不符，阅读时需要反复确认。' } as typeof assessments[number];
+    assessments[assessments.findIndex(item => item.criterion === 'semantic_duplication')] = { path: 'sample.py', criterion: 'semantic_duplication', grade: 'N/A', reason: '片段没有重复结构。' } as typeof assessments[number];
     return mockResponse(assessments);
   };
   try {
     const result = await analyzeWithAi(analyze([source('sample.py')], [], false), options, false);
-    assert.equal(result.assessments.find(item => item.criterion === 'boundary_safety')?.grade, 'U');
-    assert.equal(result.assessments.find(item => item.criterion === 'performance_risk')?.grade, 'N/A');
+    assert.equal(result.assessments.find(item => item.criterion === 'semantic_naming')?.grade, 'U');
+    assert.equal(result.assessments.find(item => item.criterion === 'semantic_duplication')?.grade, 'N/A');
     assert.equal(result.reviewedFiles, 0);
     assert.equal(result.findings.length, 0);
   } finally { globalThis.fetch = original; }
@@ -137,27 +166,26 @@ test('同一 AI 条目的独立问题逐条显示，但权重只计算一次', a
     const base = analyze([source('sample.py', 'def run(x):\n    return x')], [], false);
     const result = await analyzeWithAi(base, options, false);
     assert.equal(result.findings.length, 2);
-    assert.equal(result.findings.reduce((sum, item) => sum + item.points, 0), 12);
+    assert.equal(result.findings.reduce((sum, item) => sum + item.points, 0), 6);
     assert.deepEqual(result.findings.map(item => item.aiGrade), ['D', 'D']);
   } finally { globalThis.fetch = original; }
 });
 
-test('一个可见全局配置也可支撑项目安全问题', async () => {
+test('项目级评分只接受结构风格，不接受安全问题条目', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async (_url, init) => {
     const request = JSON.parse(String(init?.body));
     if (!String(request.messages?.[1]?.content).startsWith('评估一个 <project>')) return mockResponse(cleanFile('config.ts'));
     const assessments = cleanProject();
-    const index = assessments.findIndex(item => item.criterion === 'security_boundaries');
-    assessments[index] = { path: '<project>', criterion: 'security_boundaries', grade: 'D',
-      reason: 'config.ts 第 1 行全局禁用认证，所有路由均可被未授权访问敏感数据。', evidencePaths: ['config.ts'] } as typeof assessments[number];
+    assessments.push({ path: '<project>', criterion: 'security_boundaries', grade: 'D',
+      reason: 'config.ts 第 1 行全局禁用认证，所有路由均可被未授权访问敏感数据。', evidencePaths: ['config.ts'] } as typeof assessments[number]);
     return mockResponse(assessments);
   };
   try {
     const base = analyze([{ path: 'config.ts', language: 'TypeScript', content: 'export const authRequired = false;' }]);
     const result = await analyzeWithAi(base, options);
-    assert.equal(result.assessments.find(item => item.criterion === 'security_boundaries')?.grade, 'D');
-    assert.ok(result.findings.some(item => item.category === 'security'));
+    assert.ok(!result.assessments.some(item => item.criterion === 'security_boundaries'));
+    assert.equal(result.findings.length, 0);
   } finally { globalThis.fetch = original; }
 });
 
@@ -251,27 +279,26 @@ test('同一文件跨片段缺陷只计最严重的一次，问题明细仍保�
     assert.equal(result.reviewedFiles, 1);
     assert.equal(result.assessments.find(item => item.criterion === 'semantic_duplication')?.grade, 'D');
     assert.equal(result.findings.filter(item => item.rule === 'ai-semantic_duplication').length, result.fileRequests);
-    assert.equal(result.findings.filter(item => item.rule === 'ai-semantic_duplication').reduce((sum, item) => sum + item.points, 0), 12);
+    assert.equal(result.findings.filter(item => item.rule === 'ai-semantic_duplication').reduce((sum, item) => sum + item.points, 0), 6);
   } finally { globalThis.fetch = original; }
 });
 
-test('短作用域临时名不会升为严重命名问题，未证明输入契约的边界建议记 U', async () => {
+test('短作用域临时名不会升为严重命名问题，正确性建议不进入固定评分表', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => {
     const assessments = cleanFile('small.py');
     const naming = assessments.findIndex(item => item.criterion === 'semantic_naming');
-    const boundary = assessments.findIndex(item => item.criterion === 'boundary_safety');
     assessments[naming] = { path: 'small.py', criterion: 'semantic_naming', grade: 'C', line: 2,
       reason: '局部变量 temp 仅承接计算结果，名称较泛，需要回看赋值。' } as typeof assessments[number];
-    assessments[boundary] = { path: 'small.py', criterion: 'boundary_safety', grade: 'C', line: 2,
-      reason: '若传入 None 会抛出异常，但当前代码没有提供这类输入契约。' } as typeof assessments[number];
+    assessments.push({ path: 'small.py', criterion: 'boundary_safety', grade: 'C', line: 2,
+      reason: '若传入 None 会抛出异常，但当前代码没有提供这类输入契约。' } as typeof assessments[number]);
     return mockResponse(assessments);
   };
   try {
     const base = analyze([source('small.py', 'def calc(values):\n    temp = sum(values)\n    return temp')], [], false);
     const result = await analyzeWithAi(base, options, false);
     assert.equal(result.assessments.find(item => item.criterion === 'semantic_naming')?.grade, 'B');
-    assert.equal(result.assessments.find(item => item.criterion === 'boundary_safety')?.grade, 'U');
+    assert.ok(!result.assessments.some(item => item.criterion === 'boundary_safety'));
   } finally { globalThis.fetch = original; }
 });
 
@@ -290,14 +317,13 @@ test('AI 行号采用安全数字字符串或理由中的明确行号时仍可�
   } finally { globalThis.fetch = original; }
 });
 
-test('AI 不对本地已确认的空值访问和空 catch 重复计分', async () => {
+test('AI 不对本地空 catch 重复计分，也不接纳正确性问题', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => {
     const assessments = cleanFile('unsafe.ts');
-    const boundary = assessments.findIndex(item => item.criterion === 'boundary_safety');
     const errors = assessments.findIndex(item => item.criterion === 'error_strategy');
-    assessments[boundary] = { path: 'unsafe.ts', criterion: 'boundary_safety', grade: 'E', line: 1,
-      reason: '第 1 行 null.value 必然抛出未预期异常，核心函数无法继续执行。' } as typeof assessments[number];
+    assessments.push({ path: 'unsafe.ts', criterion: 'boundary_safety', grade: 'E', line: 1,
+      reason: '第 1 行 null.value 必然抛出未预期异常，核心函数无法继续执行。' } as typeof assessments[number]);
     assessments[errors] = { path: 'unsafe.ts', criterion: 'error_strategy', grade: 'D', line: 2,
       reason: '第 2 行 catch 块为空，异常被完全吞掉，没有可观察结果。' } as typeof assessments[number];
     return mockResponse(assessments);
@@ -305,8 +331,56 @@ test('AI 不对本地已确认的空值访问和空 catch 重复计分', async (
   try {
     const base = analyze([{ path: 'unsafe.ts', language: 'TypeScript', content: 'null.value;\ntry {} catch (e) {}' }], [], false);
     const result = await analyzeWithAi(base, options, false);
-    assert.equal(result.assessments.find(item => item.criterion === 'boundary_safety')?.grade, 'U');
+    assert.ok(!result.assessments.some(item => item.criterion === 'boundary_safety'));
     assert.equal(result.assessments.find(item => item.criterion === 'error_strategy')?.grade, 'U');
+    assert.equal(result.findings.length, 0);
+  } finally { globalThis.fetch = original; }
+});
+
+test('AI 即使把安全问题塞进风格条目也不计分', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const assessments = cleanFile('sample.py');
+    const index = assessments.findIndex(item => item.criterion === 'semantic_naming');
+    assessments[index] = { path: 'sample.py', criterion: 'semantic_naming', grade: 'E', line: 1,
+      reason: '第 1 行存在注入漏洞，访问未经授权的数据，属于安全风险。' } as typeof assessments[number];
+    return mockResponse(assessments);
+  };
+  try {
+    const result = await analyzeWithAi(analyze([source('sample.py')], [], false), options, false);
+    assert.equal(result.assessments.find(item => item.criterion === 'semantic_naming')?.grade, 'U');
+    assert.equal(result.findings.length, 0);
+  } finally { globalThis.fetch = original; }
+});
+
+test('单一职责的重复语句不能作为函数职责混杂计分', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const assessments = cleanFile('repeat.py');
+    const index = assessments.findIndex(item => item.criterion === 'function_cohesion');
+    assessments[index] = { path: 'repeat.py', criterion: 'function_cohesion', grade: 'D', line: 2,
+      reason: '第 2 行开始重复同一赋值语句数百次，函数缺少可辨认的步骤。' } as typeof assessments[number];
+    return mockResponse(assessments);
+  };
+  try {
+    const result = await analyzeWithAi(analyze([source('repeat.py', 'def run():\n    value = 1')], [], false), options, false);
+    assert.equal(result.assessments.find(item => item.criterion === 'function_cohesion')?.grade, 'U');
+    assert.equal(result.findings.length, 0);
+  } finally { globalThis.fetch = original; }
+});
+
+test('函数名不贴切只能进入命名条目，不能作为函数内聚重复计分', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const assessments = cleanFile('single.py');
+    const index = assessments.findIndex(item => item.criterion === 'function_cohesion');
+    assessments[index] = { path: 'single.py', criterion: 'function_cohesion', grade: 'B', line: 1,
+      reason: '函数仅做简单加法，主职责单一，但函数名 save 与计算行为不符。' } as typeof assessments[number];
+    return mockResponse(assessments);
+  };
+  try {
+    const result = await analyzeWithAi(analyze([source('single.py', 'def save():\n    return 1 + 2')], [], false), options, false);
+    assert.equal(result.assessments.find(item => item.criterion === 'function_cohesion')?.grade, 'U');
     assert.equal(result.findings.length, 0);
   } finally { globalThis.fetch = original; }
 });
