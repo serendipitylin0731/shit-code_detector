@@ -3,7 +3,7 @@
   "displayName": "Shit Code Detector",
   "description": "对多语言代码库进行可解释的 0–9 分质量分析",
   "icon": "media/logo.png",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "serendipitylin0731",
   "author": "_serendipity",
   "license": "MIT",
@@ -75,32 +75,25 @@
         "shitCodeDetector.ai.baseUrl": {
           "type": "string",
           "default": "https://api.deepseek.com",
-          "description": "OpenAI 兼容聊天 API 的 HTTPS 根地址。"
+          "description": "AI 服务的 HTTPS 根地址；使用 DeepSeek 时保持默认值即可，不要添加 /chat/completions。"
         },
         "shitCodeDetector.ai.model": {
           "type": "string",
-          "default": "deepseek-v4-flash",
-          "description": "AI 模型名称。"
+          "default": "deepseek-flash",
+          "description": "AI 模型 ID。默认使用 DeepSeek 当前 Flash 名称；其他兼容服务可填写自己的模型 ID。"
         },
-        "shitCodeDetector.ai.maxFiles": {
-          "type": "integer",
-          "default": 30,
-          "minimum": 1,
-          "maximum": 200,
-          "description": "送入 AI 的最多文件数；本地规则仍扫描全部有效代码。"
-        },
-        "shitCodeDetector.ai.maxCharsPerFile": {
+        "shitCodeDetector.ai.maxCharsPerRequest": {
           "type": "integer",
           "default": 12000,
           "minimum": 1000,
           "maximum": 50000,
-          "description": "单个文件送入 AI 的最多字符数。"
+          "description": "每次 AI 文件请求最多包含多少代码字符（默认 12000）。文件过长会自动连续分片；所有有效代码都会送审，这不是总量上限。较小的值会增加 API 请求次数。"
         },
         "shitCodeDetector.maxFileBytes": {
           "type": "integer",
-          "default": 524288,
-          "minimum": 1024,
-          "description": "单个代码文件的最大读取字节数。超过时跳过并计数。"
+          "default": 0,
+          "minimum": 0,
+          "description": "单个代码文件的读取上限，单位字节；默认 0 表示不限制。若设置正数，超限文件会跳过并在报告中计数，无法声称完整覆盖。"
         }
       }
     }

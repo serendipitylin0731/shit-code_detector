@@ -5,21 +5,10 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { analyze, CodeFile, mergeAnalysis } from '../src/analysis';
-import { selectAiFiles } from '../src/aiSampling';
 import { compareGitBaseline } from '../src/gitBaseline';
 import { summaryMetrics } from '../src/summaryMetrics';
 
 const code = (name: string, content: string): CodeFile => ({ path: name, language: 'TypeScript', content });
-
-test('混合抽样保留变更文件、入口与无格式问题的核心模块', () => {
-  const files = [code('src/app.ts', "import { core } from './core';"), code('src/core.ts', 'export const core = 1;'),
-    code('src/changed.ts', 'export const changed = 2;'), ...Array.from({ length: 10 }, (_, i) => code(`src/f${i}.ts`, `export const v${i} = ${i};  `))];
-  const analysis = analyze(files, [], false);
-  const chosen = selectAiFiles(analysis, 4, ['src/changed.ts']).map(file => file.path);
-  assert.ok(chosen.includes('src/changed.ts'));
-  assert.ok(chosen.includes('src/core.ts'));
-  assert.ok(chosen.includes('src/app.ts'));
-});
 
 test('高风险状态与每千行密度独立于最终数值', () => {
   const analysis = analyze([code('src/main.ts', 'null.value;')], [], false);

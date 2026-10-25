@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { analyze, CodeFile } from '../src/analysis';
 import { analyzeWithAi } from '../src/ai';
+import { splitAiFile } from '../src/aiChunks';
 import { AI_BASE_POINTS, AI_CRITERIA, FILE_AI_CRITERIA, gradePoints, PROJECT_AI_CRITERIA } from '../src/aiRubric';
 
-const options = { baseUrl: 'https://api.deepseek.com', model: 'test', apiKey: 'test', maxFiles: 3, maxCharsPerFile: 1000 };
+const options = { baseUrl: 'https://api.deepseek.com', model: 'test', apiKey: 'test', maxCharsPerRequest: 12000 };
 const source = (path: string, content = 'def run():\n    pass'): CodeFile => ({ path, language: 'Python', content });
 const cleanFile = (path: string) => FILE_AI_CRITERIA.map(criterion => ({ path, criterion: criterion.id, grade: 'A', reason: '所给代码未见该项问题。' }));
 const cleanProject = () => PROJECT_AI_CRITERIA.map(criterion => ({ path: '<project>', criterion: criterion.id, grade: 'A', reason: '所给项目证据未见该项问题。' }));
@@ -138,6 +139,98 @@ test('一个可见全局配置也可支撑项目安全问题', async () => {
     const result = await analyzeWithAi(base, options);
     assert.equal(result.assessments.find(item => item.criterion === 'security_boundaries')?.grade, 'D');
     assert.ok(result.findings.some(item => item.category === 'security'));
+  } finally { globalThis.fetch = original; }
+});
+
+test('大项目全部文件逐片审查，项目元数据覆盖全部文件', async () => {
+  const original = globalThis.fetch;
+  const projectInputs: { totalFiles: number; fileSummaries: { path: string }[] }[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body));
+    const user = String(request.messages[1].content);
+    const data = JSON.parse(user.slice(user.indexOf('\n\n') + 2));
+    if (user.startsWith('评估一个 <project>')) {
+      projectInputs.push(data);
+      return mockResponse(cleanProject());
+    }
+    return mockResponse((data as { path: string }[]).flatMap(file => cleanFile(file.path)));
+  };
+  try {
+    const files = Array.from({ length: 20 }, (_, index) => source(`src/module_${index}.py`, `def item_${index}():\n    return ${index}\n` + '# sample\n'.repeat(150)));
+    const result = await analyzeWithAi(analyze(files), { ...options, maxCharsPerRequest: 1000 });
+    assert.equal(result.totalFiles, 20);
+    assert.equal(result.reviewedFiles, 20);
+    assert.equal(result.reviewedChars, result.totalChars);
+    assert.ok(result.fileRequests > files.length);
+    assert.ok(projectInputs.every(input => input.totalFiles === 20));
+    assert.deepEqual(projectInputs.flatMap(input => input.fileSummaries.map(item => item.path)).sort(), files.map(file => file.path).sort());
+    assert.equal(result.reviewedProject, false);
+    assert.equal(result.assessments.find(item => item.criterion === 'dependency_direction')?.grade, 'U');
+  } finally { globalThis.fetch = original; }
+});
+
+test('长文件中间行被实际送审，未展示行号仍降为 U', async () => {
+  const original = globalThis.fetch;
+  const file = source('large.py', Array.from({ length: 220 }, (_, index) => `value_${index} = ${index}`).join('\n'));
+  const chunks = splitAiFile(file, 900);
+  assert.ok(chunks.length > 1);
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body));
+    const input = JSON.parse(String(request.messages[1].content).split('\n\n').at(-1) ?? '[]');
+    const visible = new Set(String(input[0].code).split('\n').map(line => Number(line.match(/^(\d+)/)?.[1])));
+    const omitted = Array.from({ length: 220 }, (_, index) => index + 1).find(line => !visible.has(line));
+    if (!omitted) throw new Error('测试分片必须有片段外行号');
+    const assessments = cleanFile(file.path);
+    assessments[0] = { path: file.path, criterion: 'logic_correctness', grade: 'D', line: omitted,
+      reason: `第 ${omitted} 行返回值与可见契约冲突，导致调用方得到错误结果。` } as typeof assessments[number];
+    return mockResponse(assessments);
+  };
+  try {
+    const result = await analyzeWithAi(analyze([file], [], false), { ...options, maxCharsPerRequest: 900 }, false);
+    assert.equal(result.assessments.find(item => item.criterion === 'logic_correctness')?.grade, 'U');
+    assert.equal(result.reviewedFiles, 0);
+    assert.equal(result.fileRequests, chunks.length);
+  } finally { globalThis.fetch = original; }
+});
+
+test('任一代码分片请求失败时不把该文件标成完整审查', async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    if (calls === 2) return new Response('rate limited', { status: 429 });
+    return mockResponse(cleanFile('large.py'));
+  };
+  try {
+    const file = source('large.py', 'value = 1\n'.repeat(150));
+    const result = await analyzeWithAi(analyze([file], [], false), { ...options, maxCharsPerRequest: 500 }, false);
+    assert.ok(result.fileRequests > 1);
+    assert.equal(result.reviewedFiles, 0);
+    assert.ok(result.reviewedChars < result.totalChars);
+    assert.equal(result.assessments.find(item => item.criterion === 'logic_correctness')?.grade, 'U');
+    assert.ok(result.errors.some(error => error.includes('HTTP 429')));
+  } finally { globalThis.fetch = original; }
+});
+
+test('同一文件跨片段缺陷只计最严重的一次，问题明细仍保留', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body));
+    const input = JSON.parse(String(request.messages[1].content).split('\n\n').at(-1) ?? '[]');
+    const part = input[0].part as number;
+    const line = Number(String(input[0].code).match(/^(\d+)/)?.[1]);
+    const assessments = cleanFile('large.py');
+    assessments[0] = { path: 'large.py', criterion: 'logic_correctness', grade: part === 1 ? 'B' : 'D', line,
+      reason: `第 ${line} 行的可见条件直接返回与已定义契约冲突的值。` } as typeof assessments[number];
+    return mockResponse(assessments);
+  };
+  try {
+    const file = source('large.py', 'value = 1\n'.repeat(110));
+    const result = await analyzeWithAi(analyze([file], [], false), { ...options, maxCharsPerRequest: 500 }, false);
+    assert.equal(result.reviewedFiles, 1);
+    assert.equal(result.assessments.find(item => item.criterion === 'logic_correctness')?.grade, 'D');
+    assert.equal(result.findings.filter(item => item.rule === 'ai-logic_correctness').length, result.fileRequests);
+    assert.equal(result.findings.filter(item => item.rule === 'ai-logic_correctness').reduce((sum, item) => sum + item.points, 0), 18);
   } finally { globalThis.fetch = original; }
 });
 

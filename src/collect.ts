@@ -22,9 +22,9 @@ export async function collectUris(entries: ScanEntry[], maxFileBytes: number, to
     if (isSensitiveConfig(entry.path) || !((explicitSelection || entry.configured) ? Boolean(languageOf(entry.path)) : isEligible(entry.path))) { collection.skipped.unsupported++; continue; }
     try {
       const stat = await vscode.workspace.fs.stat(entry.uri);
-      if (stat.size > maxFileBytes) { collection.skipped.large++; continue; }
+      if (maxFileBytes > 0 && stat.size > maxFileBytes) { collection.skipped.large++; continue; }
       const bytes = await vscode.workspace.fs.readFile(entry.uri);
-      if (bytes.length > maxFileBytes) { collection.skipped.large++; continue; }
+      if (maxFileBytes > 0 && bytes.length > maxFileBytes) { collection.skipped.large++; continue; }
       if (bytes.includes(0)) { collection.skipped.binary++; continue; }
       const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
       collection.files.push({ path: entry.path.replaceAll('\\', '/'), language: languageOf(entry.path)!, content, uri: entry.uri.toString() });
@@ -92,7 +92,7 @@ export async function collectActiveDocument(document: vscode.TextDocument, maxFi
   const skipped = { unsupported: 0, large: 0, binary: 0, unreadable: 0 };
   if (isSensitiveConfig(entry.path) || !languageOf(entry.path)) { skipped.unsupported++; return { files: [], skipped }; }
   const content = document.getText();
-  if (Buffer.byteLength(content, 'utf8') > maxFileBytes) { skipped.large++; return { files: [], skipped }; }
+  if (maxFileBytes > 0 && Buffer.byteLength(content, 'utf8') > maxFileBytes) { skipped.large++; return { files: [], skipped }; }
   if (content.includes('\0')) { skipped.binary++; return { files: [], skipped }; }
   return { files: [{ path: entry.path, language: languageOf(entry.path)!, content, uri: document.uri.toString() }], skipped };
 }
