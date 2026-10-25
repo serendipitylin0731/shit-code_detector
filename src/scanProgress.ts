@@ -1,30 +1,35 @@
 export type ScanScope = 'workspace' | 'files' | 'repository';
 export type ScanStage = 'discovery' | 'read' | 'local' | 'baseline' | 'aiFiles' | 'aiProject' | 'report';
 
-/** Shares one 0–100 scale across stages. Percentages describe completed work, not elapsed time. */
+/** Reading owns 0–10%; each subsequent file or AI request owns an equal share of 10–100%. */
 export class ScanProgress {
-  private readonly ranges: Partial<Record<ScanStage, readonly [number, number]>>;
   private current = 0;
+  private localCount = 0;
+  private aiFileCount = 0;
+  private aiProjectCount = 0;
 
-  constructor(scope: ScanScope, aiEnabled: boolean) {
-    const baseline = scope === 'workspace';
-    const projectAi = aiEnabled && scope !== 'files';
-    const localEnd = aiEnabled ? baseline ? 40 : 45 : baseline ? 90 : 95;
-    this.ranges = {
-      discovery: [0, 10], read: [10, 25], local: [25, localEnd], report: [95, 100],
-      ...(baseline ? { baseline: [localEnd, aiEnabled ? 45 : 95] as const } : {}),
-      ...(aiEnabled ? { aiFiles: [45, projectAi ? 85 : 95] as const } : {}),
-      ...(projectAi ? { aiProject: [85, 95] as const } : {})
-    };
+  configure(localFiles: number, aiFileRequests = 0, aiProjectRequests = 0): void {
+    if (![localFiles, aiFileRequests, aiProjectRequests].every(value => Number.isSafeInteger(value) && value >= 0) || localFiles < 1) {
+      throw new Error('评分进度需要有效的任务数量。');
+    }
+    this.localCount = localFiles;
+    this.aiFileCount = aiFileRequests;
+    this.aiProjectCount = aiProjectRequests;
   }
 
   /** Unknown-duration stages keep the previous completed percentage. */
   stage(stage: ScanStage, completed?: number, total?: number): number {
-    const range = this.ranges[stage];
-    if (!range) return this.current;
+    if (stage === 'discovery' || stage === 'baseline' || stage === 'report') return this.current;
     const fraction = total !== undefined && total > 0 && completed !== undefined
       ? Math.max(0, Math.min(1, completed / total)) : 0;
-    this.current = Math.max(this.current, Math.min(99, range[0] + (range[1] - range[0]) * fraction));
+    if (stage === 'read') this.current = Math.max(this.current, 10 * fraction);
+    else {
+      const work = this.localCount + this.aiFileCount + this.aiProjectCount;
+      if (!work) return this.current;
+      const before = stage === 'local' ? 0 : stage === 'aiFiles' ? this.localCount : this.localCount + this.aiFileCount;
+      const count = stage === 'local' ? this.localCount : stage === 'aiFiles' ? this.aiFileCount : this.aiProjectCount;
+      this.current = Math.max(this.current, 10 + 90 * (before + count * fraction) / work);
+    }
     return this.current;
   }
 

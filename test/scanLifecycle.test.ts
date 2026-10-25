@@ -46,17 +46,25 @@ test('侧边栏打开未返回时扫描仍启动，取消能结束正在等待�
     if (parent?.filename?.endsWith('/src/extension.js') && request === './sidebar') return { SidebarProvider };
     if (parent?.filename?.endsWith('/src/extension.js') && request === './collect') return {
       workspaceEntries: (token: CancellationTokenSource['token']) => {
-        if (mode !== 'cancel') return Promise.resolve([]);
+        if (mode !== 'cancel') return Promise.resolve([{}]);
         started(); return new Promise<never>((_resolve, reject) => token.onCancellationRequested(() => reject(new CancellationError())));
       },
-      collectUris: async () => ({ files: [{ path: 'a.py', language: 'Python', content: 'value = 1\n' }],
-        skipped: { unsupported: 0, large: 0, binary: 0, unreadable: 0 } })
+      collectUris: async (_entries: unknown, _limit: unknown, _token: unknown, _flag: unknown, onProgress: (completed: number, total: number) => void) => {
+        onProgress(1, 1);
+        return { files: [{ path: 'a.py', language: 'Python', content: 'value = 1\n' }],
+          skipped: { unsupported: 0, large: 0, binary: 0, unreadable: 0 } };
+      }
     };
     if (parent?.filename?.endsWith('/src/extension.js') && request === './analyzeAsync') return {
-      analyzeInWorker: async (files: unknown[]) => ({ files, findings: [], score: 0, checkCoverage: '测试覆盖',
-        categoryScores: { style: 0, naming: 0, readability: 0, complexity: 0, duplication: 0, consistency: 0, architecture: 0 } })
+      analyzeInWorker: async (files: unknown[], _mode: unknown, _signal: unknown,
+        onProgress: (completed: number, total: number, phase: 'files') => void) => {
+        onProgress(files.length, files.length, 'files');
+        return { files, findings: [], score: 0, checkCoverage: '测试覆盖',
+          categoryScores: { style: 0, naming: 0, readability: 0, complexity: 0, duplication: 0, consistency: 0, architecture: 0 } };
+      }
     };
     if (parent?.filename?.endsWith('/src/extension.js') && request === './ai') return {
+      planAiRequests: () => ({ fileRequests: 2, projectRequests: 2 }),
       analyzeWithAi: async (_analysis: unknown, options: { onProgress: (completed: number, total: number) => void;
         onProjectProgress: (completed: number, total: number) => void }) => {
         options.onProgress(0, 2); options.onProgress(1, 2); options.onProgress(2, 2);
@@ -91,6 +99,7 @@ test('侧边栏打开未返回时扫描仍启动，取消能结束正在等待�
   assert.ok(messages.includes('评分完成'));
   const scanProgress = progressValues.slice(firstProgressIndex);
   assert.equal(scanProgress[0], 0);
+  assert.ok(scanProgress.includes(10));
   assert.equal(scanProgress.at(-1), 100);
   assert.ok(scanProgress.every((value, index) => index === 0 || value >= scanProgress[index - 1]));
   mode = 'ai';
@@ -99,6 +108,7 @@ test('侧边栏打开未返回时扫描仍启动，取消能结束正在等待�
   const aiProgress = progressValues.slice(firstAiProgressIndex);
   assert.ok(messages.includes('AI 代码片段 1/2'));
   assert.ok(messages.includes('AI 项目结构 1/2'));
+  for (const percent of [10, 28, 46, 64, 82, 100]) assert.ok(aiProgress.includes(percent), `缺少总进度 ${percent}%：${aiProgress}`);
   assert.equal(aiProgress.at(-1), 100);
   assert.ok(aiProgress.every((value, index) => index === 0 || value >= aiProgress[index - 1]));
 });

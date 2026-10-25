@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { analyze, CodeFile } from '../src/analysis';
-import { analyzeWithAi } from '../src/ai';
+import { analyzeWithAi, planAiRequests } from '../src/ai';
 import { splitAiFile } from '../src/aiChunks';
 import { AI_BASE_POINTS, AI_CRITERIA, FILE_AI_CRITERIA, gradePoints, PROJECT_AI_CRITERIA } from '../src/aiRubric';
 
@@ -269,6 +269,7 @@ test('大项目全部文件逐片审查，项目代码也覆盖全部文件', as
   try {
     const files = Array.from({ length: 20 }, (_, index) => source(`src/module_${index}.py`, `def item_${index}():\n    return ${index}\n` + '# sample\n'.repeat(150)));
     const result = await analyzeWithAi(analyze(files), { ...options, maxCharsPerRequest: 1000 });
+    assert.deepEqual(await planAiRequests(files, 1000, true), { fileRequests: result.fileRequests, projectRequests: result.projectRequests });
     assert.equal(result.totalFiles, 20);
     assert.equal(result.reviewedFiles, 20);
     assert.equal(result.processedFiles, 20);

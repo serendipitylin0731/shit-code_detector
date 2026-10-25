@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import path from 'node:path';
 import { CodeFile, Finding, mergeAnalysis, REFERENCE_CODE_LINES } from './analysis';
 import { analyzeInWorker } from './analyzeAsync';
-import { AiResult, analyzeWithAi } from './ai';
+import { AiResult, analyzeWithAi, planAiRequests } from './ai';
 import { AI_BASE_POINTS, AI_CRITERIA, AI_RUBRIC_VERSION } from './aiRubric';
 import { finalScore, formattedFinalScore, SCORE_FORMULA } from './scoreTransform';
 import { summaryMetrics } from './summaryMetrics';
@@ -68,7 +68,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const maxFileBytes = config.get<number>('maxFileBytes', 0);
         const apiKey = await context.secrets.get(secretKey);
         const aiEnabled = Boolean(apiKey);
-        const plan = new ScanProgress(scope, aiEnabled);
+        const plan = new ScanProgress();
         if (token.isCancellationRequested) throw new vscode.CancellationError();
         let lastDiscoveryUpdate = 0;
         const onDiscovered = (count: number): void => {
@@ -114,8 +114,13 @@ export function activate(context: vscode.ExtensionContext): void {
         if (token.isCancellationRequested) throw new vscode.CancellationError();
         if (scope === 'repository') collection.files.forEach(file => { file.uri = undefined; });
         if (!collection.files.length) throw new Error('没有找到可评分的代码文件。请检查 .shitcode／.shitcode_ignore、文件类型或排除规则。');
-        progress.report({ message: `本地规则 0/${collection.files.length} 个文件`, percentage: plan.stage('local', 0, collection.files.length) });
         const projectMode = scope !== 'files';
+        const maxCharsPerRequest = config.get<number>('ai.maxCharsPerRequest', 12000);
+        if (aiEnabled) progress.report({ message: '统计 AI 评分任务…', percentage: plan.stage('read', candidateCount, candidateCount) });
+        const aiWork = aiEnabled ? await planAiRequests(collection.files, maxCharsPerRequest, projectMode) : { fileRequests: 0, projectRequests: 0 };
+        if (token.isCancellationRequested) throw new vscode.CancellationError();
+        plan.configure(collection.files.length, aiWork.fileRequests, aiWork.projectRequests);
+        progress.report({ message: `本地规则 0/${collection.files.length} 个文件`, percentage: plan.stage('local', 0, collection.files.length) });
         const analysisController = new AbortController();
         const analysisSubscription = token.onCancellationRequested(() => analysisController.abort());
         let result;
@@ -140,7 +145,7 @@ export function activate(context: vscode.ExtensionContext): void {
               baseUrl: config.get<string>('ai.baseUrl', 'https://api.deepseek.com'),
               model: config.get<string>('ai.model', 'deepseek-flash'),
               apiKey,
-              maxCharsPerRequest: config.get<number>('ai.maxCharsPerRequest', 12000),
+              maxCharsPerRequest,
               onProgress: (completed, total) => progress.report({ message: `AI 代码片段 ${completed}/${total}`, percentage: plan.stage('aiFiles', completed, total) }),
               onProjectProgress: (completed, total) => progress.report({ message: `AI 项目结构 ${completed}/${total}`, percentage: plan.stage('aiProject', completed, total) })
             }, projectMode, controller.signal);
