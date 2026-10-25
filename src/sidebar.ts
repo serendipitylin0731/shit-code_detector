@@ -30,25 +30,28 @@ export type SidebarAction =
   | { action: 'importRepositoryConfig' }
   | { action: 'clearRepositoryConfig' }
   | { action: 'setApiKey' }
+  | { action: 'openSettings' }
   | { action: 'openFinding'; index: number }
   | { action: 'openReport' }
   | { action: 'exportJson' };
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
-  static readonly viewId = 'shitCodeDetector.dashboard';
+  static readonly viewId = 'shitCodeDetector.dashboardRight';
   private view?: vscode.WebviewView;
   private result?: DashboardResult;
   private busy = false;
   private message = '';
   private repositoryConfigName?: string;
   private apiKeyConfigured = false;
+  private activeFileName?: string;
 
-  constructor(private readonly onAction: (action: SidebarAction) => Promise<void>) {}
+  constructor(private readonly onAction: (action: SidebarAction) => Promise<void>, private readonly extensionUri: vscode.Uri) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
-    view.webview.options = { enableScripts: true, localResourceRoots: [] };
-    view.webview.html = html(view.webview);
+    const mediaRoot = vscode.Uri.joinPath(this.extensionUri, 'media');
+    view.webview.options = { enableScripts: true, localResourceRoots: [mediaRoot] };
+    view.webview.html = html(view.webview, view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'logo.svg')).toString());
     view.webview.onDidReceiveMessage((message: SidebarAction | { action: 'ready' }) => {
       if (message?.action === 'ready') { this.sendState(); return; }
       void this.onAction(message as SidebarAction);
@@ -58,55 +61,70 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   setRepositoryConfigName(name?: string): void { this.repositoryConfigName = name; this.sendState(); }
   setApiKeyConfigured(value: boolean): void { this.apiKeyConfigured = value; this.sendState(); }
+  setActiveFileName(value?: string): void { this.activeFileName = value; this.sendState(); }
 
   setBusy(value: boolean, message = ''): void { this.busy = value; this.message = message; this.sendState(); }
   setError(message: string): void { this.busy = false; this.message = message; this.sendState(); }
   setResult(result: DashboardResult): void { this.result = result; this.busy = false; this.message = '评分完成'; this.sendState(); }
   async reveal(): Promise<void> {
-    if (!this.view) await vscode.commands.executeCommand('workbench.view.extension.shitCodeDetector');
+    if (!this.view) await vscode.commands.executeCommand('workbench.view.extension.shitCodeDetectorRight');
     this.view?.show(false);
   }
   getFinding(index: number): DashboardFinding | undefined { return this.result?.findings[index]; }
 
   private sendState(): void {
     void this.view?.webview.postMessage({ type: 'state', result: this.result, busy: this.busy, message: this.message,
-      repositoryConfigName: this.repositoryConfigName, apiKeyConfigured: this.apiKeyConfigured });
+      repositoryConfigName: this.repositoryConfigName, apiKeyConfigured: this.apiKeyConfigured, activeFileName: this.activeFileName });
   }
 }
 
-function html(webview: vscode.Webview): string {
+function html(webview: vscode.Webview, logoUrl: string): string {
   const nonce = randomBytes(16).toString('base64');
   return `<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; padding: 0 12px 24px; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: 12px; }
+  body { margin: 0; padding: 12px 12px 28px; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); font-family: var(--vscode-font-family); font-size: 12px; }
   button, select, input { font: inherit; }
   button { cursor: pointer; }
-  .score-panel { position: sticky; top: 0; z-index: 2; padding: 16px 0 10px; background: var(--vscode-sideBar-background); border-bottom: 1px solid var(--vscode-panel-border); }
+  .score-panel { position: sticky; top: 0; z-index: 2; padding: 13px 14px 14px; border: 1px solid var(--vscode-panel-border); border-radius: 12px; background: var(--vscode-editorWidget-background); box-shadow: 0 6px 24px #00000012; }
+  .brand { display: flex; align-items: center; gap: 9px; min-height: 38px; }
+  .brand img { width: 36px; height: 36px; flex: 0 0 auto; }
+  .brand-copy { flex: 1; min-width: 0; }
+  .brand-title { font-size: 12px; font-weight: 750; letter-spacing: .01em; }
+  .brand-sub { color: var(--vscode-descriptionForeground); font-size: 10px; margin-top: 2px; }
+  .icon-button { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 auto; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: transparent; color: var(--vscode-foreground); }
+  .icon-button:hover, .icon-button[aria-expanded="true"] { background: var(--vscode-list-hoverBackground); }
+  .icon-button svg { width: 18px; height: 18px; }
   .eyebrow { color: var(--vscode-descriptionForeground); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
-  .score { font-size: 44px; line-height: 1.1; font-weight: 700; font-variant-numeric: tabular-nums; margin: 4px 0; }
+  .score { font-size: 49px; line-height: 1.05; font-weight: 760; font-variant-numeric: tabular-nums; margin: 4px 0; letter-spacing: -.04em; }
+  .score[data-tone="good"] { color: #65c99d; } .score[data-tone="watch"] { color: #f0b465; } .score[data-tone="bad"] { color: #f27d79; }
   .hint, .meta { color: var(--vscode-descriptionForeground); line-height: 1.45; overflow-wrap: anywhere; }
   .risk { color: #d94b54; font-weight: 700; margin-top: 4px; }
   .score-line { display: flex; align-items: baseline; gap: 8px; }
-  .score-line span { color: var(--vscode-descriptionForeground); }
-  .section { margin-top: 18px; }
-  h2 { font-size: 12px; margin: 0 0 9px; }
-  .field { display: block; width: 100%; margin: 6px 0; padding: 7px 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 4px; }
-  .action { display: block; width: 100%; margin: 6px 0; padding: 8px; border: none; border-radius: 4px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); text-align: left; }
+  .score-line span { color: var(--vscode-descriptionForeground); font-size: 13px; }
+  .section { margin-top: 12px; padding: 13px; border: 1px solid var(--vscode-panel-border); border-radius: 11px; background: var(--vscode-editorWidget-background); }
+  h2 { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--vscode-descriptionForeground); margin: 0 0 10px; }
+  .field { display: block; width: 100%; margin: 6px 0; padding: 9px 10px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 7px; }
+  .field:focus-visible, button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 2px; }
+  .action { display: block; width: 100%; margin: 8px 0 0; padding: 9px 10px; border: none; border-radius: 7px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); text-align: center; font-weight: 650; }
   .action:hover { background: var(--vscode-button-hoverBackground); }
   .action.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
   .action.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
   .action:disabled { opacity: .55; cursor: default; }
   .row { display: flex; gap: 6px; }
   .row > * { flex: 1; min-width: 0; }
-  .target-switch { display: flex; gap: 4px; margin-bottom: 9px; }
-  .target-switch button { flex: 1; padding: 7px 4px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-  .target-switch button[aria-pressed="true"] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-  .status { margin: 8px 0; min-height: 16px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+  .target-switch { display: flex; gap: 3px; margin-bottom: 12px; padding: 3px; border-radius: 8px; background: var(--vscode-input-background); }
+  .target-switch button { flex: 1; min-width: 0; padding: 8px 3px; border: 0; border-radius: 6px; background: transparent; color: var(--vscode-descriptionForeground); font-weight: 600; white-space: nowrap; }
+  .target-switch button[aria-pressed="true"] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); box-shadow: 0 1px 4px #00000022; }
+  .target-note { padding: 7px 0 2px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+  .status { margin: 10px 3px; min-height: 16px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+  .settings-heading { display: flex; align-items: center; justify-content: space-between; }
+  .settings-heading h2 { margin: 0; }
+  .settings-heading .hint { font-size: 10px; }
   .chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0; }
   .chip { padding: 4px 6px; background: var(--vscode-editorWidget-background); border-radius: 4px; }
   .rank { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; padding: 6px; border: 0; border-radius: 3px; color: var(--vscode-foreground); background: var(--vscode-editorWidget-background); text-align: left; }
@@ -131,16 +149,18 @@ function html(webview: vscode.Webview): string {
   .pager { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 12px; }
   .pager button { padding: 4px 7px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 0; border-radius: 3px; }
 </style></head><body>
-<div class="score-panel"><div class="eyebrow">Shit score</div><div class="score-line"><div class="score" id="score">—</div><span>/ 9</span></div><div class="meta" id="summary">选择评分对象后开始</div><div class="risk" id="risk"></div></div>
-<section class="section"><h2>评分对象</h2><div class="target-switch" role="group" aria-label="评分目标"><button id="targetRoot" type="button" aria-pressed="true">根目录</button><button id="targetRepository" type="button" aria-pressed="false">Git 仓库</button></div><div id="rootControls"><button class="action" id="scanWorkspace">评分当前根目录</button><button class="action secondary" id="scanFiles">选择文件评分…</button><div class="hint">根目录和选定文件使用 .shitcode 或 .shitcode_ignore；前者优先，路径规则同 .gitignore。</div></div><div id="repositoryControls" hidden><input class="field" id="repoUrl" type="url" placeholder="https://github.com/owner/repo.git" aria-label="Git 仓库 HTTPS 地址"><div class="row"><button class="action secondary" id="importRepositoryConfig">导入评分规则…</button><button class="action secondary" id="clearRepositoryConfig" hidden>清除规则</button></div><div class="hint" id="repositoryConfigStatus">未导入规则：扫描仓库中的有效代码。</div><button class="action" id="scanRepository">评分 Git 仓库</button></div></section>
-<section class="section"><h2>AI 分析</h2><button class="action secondary" id="setApiKey">安全保存或更换 Key</button><div class="hint" id="apiKeyStatus">未配置 Key：只运行本地规则。</div></section>
+<div class="score-panel"><div class="brand"><img src="${logoUrl}" alt="Shit Code Detector 标志"><div class="brand-copy"><div class="brand-title">Shit Code Detector</div><div class="brand-sub">代码质量雷达</div></div><button class="icon-button" id="settingsToggle" type="button" aria-label="打开设置" title="设置" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8.8a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4Z" stroke="currentColor" stroke-width="1.7"/><path d="m10.4 2.8-.5 1.7a8 8 0 0 0-1.7.9L6.5 5l-2 2 1 1.7a8 8 0 0 0-.8 1.7l-1.9.5v2.8l1.9.5a8 8 0 0 0 .8 1.7l-1 1.7 2 2 1.7-1a8 8 0 0 0 1.7.8l.5 1.9h2.8l.5-1.9a8 8 0 0 0 1.7-.8l1.7 1 2-2-1-1.7a8 8 0 0 0 .8-1.7l1.9-.5v-2.8l-1.9-.5a8 8 0 0 0-.8-1.7l1-1.7-2-2-1.7 1a8 8 0 0 0-1.7-.8l-.5-1.9h-2.8Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></button></div><div class="eyebrow" style="margin-top: 11px">综合评分</div><div class="score-line"><div class="score" id="score">—</div><span>/ 9</span></div><div class="meta" id="summary">选择对象后开始评分</div><div class="risk" id="risk"></div></div>
+<section class="section" id="settingsPanel" hidden><div class="settings-heading"><h2>AI 设置</h2><span class="hint">保密存储</span></div><div class="hint" id="apiKeyStatus">未配置 Key：只运行本地规则。</div><button class="action secondary" id="setApiKey">保存或更换 API Key</button><button class="action secondary" id="openSettings">调整模型与 API 地址</button></section>
+<section class="section"><h2>评分对象</h2><div class="target-switch" role="group" aria-label="评分目标"><button id="targetRoot" type="button" aria-pressed="true">当前项目</button><button id="targetFile" type="button" aria-pressed="false">单文件</button><button id="targetRepository" type="button" aria-pressed="false">Git 仓库</button></div><div id="rootControls"><div class="target-note">从当前项目根目录读取待评分代码。</div><button class="action" id="scanWorkspace">评分当前项目</button></div><div id="fileControls" hidden><div class="target-note" id="activeFileName">先在编辑器中打开代码文件。</div><button class="action" id="scanFiles">评分当前文件</button></div><div id="repositoryControls" hidden><input class="field" id="repoUrl" type="url" placeholder="https://github.com/owner/repo.git" aria-label="Git 仓库 HTTPS 地址"><div class="row"><button class="action secondary" id="importRepositoryConfig">导入评分规则…</button><button class="action secondary" id="clearRepositoryConfig" hidden>清除规则</button></div><div class="hint" id="repositoryConfigStatus">未导入规则：扫描仓库中的有效代码。</div><button class="action" id="scanRepository">评分 Git 仓库</button></div></section>
 <div class="status" id="status" role="status"></div>
 <section class="section" id="results" hidden><div class="chips" id="categories"></div><h2>问题最多的文件</h2><div id="fileRanking"></div><details id="aiDetails"><summary id="aiGradeTitle">AI 分项等级</summary><div class="hint">固定条目按 A–E、N/A、U 分级；权重与公式见评分文档。</div><div id="aiAssessmentList"></div></details><div class="list-head"><h2 id="findingTitle">具体问题</h2><div><button class="open" id="openReport">Markdown 报告</button> · <button class="open" id="exportJson">导出 JSON</button></div></div><select class="field" id="fileFilter" aria-label="筛选文件"><option value="all">全部文件</option></select><select class="field" id="categoryFilter" aria-label="筛选类别"><option value="all">全部类别</option><option value="architecture">架构</option><option value="style">风格</option><option value="naming">命名</option><option value="readability">可读性</option><option value="complexity">复杂度</option><option value="duplication">重复</option><option value="consistency">一致性</option><option value="correctness">正确性</option><option value="security">安全</option></select><div class="hint" id="coverage"></div><div id="findingList"></div><div class="pager"><button id="previous">上一页</button><span id="pageLabel"></span><button id="next">下一页</button></div></section>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const $ = id => document.getElementById(id);
   let current = null, page = 0, busy = false;
-  let targetMode = vscode.getState()?.targetMode === 'repository' ? 'repository' : 'root';
+  const savedState = vscode.getState() || {};
+  let targetMode = ['root', 'file', 'repository'].includes(savedState.targetMode) ? savedState.targetMode : 'root';
+  let settingsOpen = Boolean(savedState.settingsOpen);
   const pageSize = 100;
   const categoryNames = { architecture: '架构', style: '风格', naming: '命名', readability: '可读性', complexity: '复杂度', duplication: '重复', consistency: '一致性', correctness: '正确性', security: '安全' };
   const severityNames = { low: '轻微', medium: '一般', high: '较重', critical: '严重' };
@@ -148,20 +168,32 @@ function html(webview: vscode.Webview): string {
   function send(action, extras) { vscode.postMessage(Object.assign({ action }, extras || {})); }
   function renderTargetMode() {
     $('rootControls').hidden = targetMode !== 'root';
+    $('fileControls').hidden = targetMode !== 'file';
     $('repositoryControls').hidden = targetMode !== 'repository';
     $('targetRoot').setAttribute('aria-pressed', String(targetMode === 'root'));
+    $('targetFile').setAttribute('aria-pressed', String(targetMode === 'file'));
     $('targetRepository').setAttribute('aria-pressed', String(targetMode === 'repository'));
-    vscode.setState({ targetMode });
+    vscode.setState({ targetMode, settingsOpen });
+  }
+  function renderSettings() {
+    $('settingsPanel').hidden = !settingsOpen;
+    $('settingsToggle').setAttribute('aria-expanded', String(settingsOpen));
+    $('settingsToggle').setAttribute('aria-label', settingsOpen ? '关闭设置' : '打开设置');
+    vscode.setState({ targetMode, settingsOpen });
   }
   $('targetRoot').onclick = () => { targetMode = 'root'; renderTargetMode(); };
+  $('targetFile').onclick = () => { targetMode = 'file'; renderTargetMode(); };
   $('targetRepository').onclick = () => { targetMode = 'repository'; renderTargetMode(); };
   renderTargetMode();
+  $('settingsToggle').onclick = () => { settingsOpen = !settingsOpen; renderSettings(); };
+  renderSettings();
   $('scanWorkspace').onclick = () => send('scanWorkspace');
   $('scanFiles').onclick = () => send('scanFiles');
   $('scanRepository').onclick = () => send('scanRepository', { url: $('repoUrl').value.trim() });
   $('importRepositoryConfig').onclick = () => send('importRepositoryConfig');
   $('clearRepositoryConfig').onclick = () => send('clearRepositoryConfig');
   $('setApiKey').onclick = () => send('setApiKey');
+  $('openSettings').onclick = () => send('openSettings');
   $('openReport').onclick = () => send('openReport');
   $('exportJson').onclick = () => send('exportJson');
   $('categoryFilter').onchange = () => { page = 0; renderFindings(); };
@@ -200,10 +232,12 @@ function html(webview: vscode.Webview): string {
     $('repositoryConfigStatus').textContent = state.repositoryConfigName ? '已导入 ' + state.repositoryConfigName + '，按其规则筛选仓库文件。' : '未导入规则：扫描仓库中的有效代码。';
     $('clearRepositoryConfig').hidden = !state.repositoryConfigName;
     $('apiKeyStatus').textContent = state.apiKeyConfigured ? 'Key 已安全保存；每次评分自动进行 AI 审查。' : '未配置 Key：只运行本地规则。';
+    $('activeFileName').textContent = state.activeFileName ? '当前文件：' + state.activeFileName : '先在编辑器中打开代码文件。';
     if (state.result) {
       const changed = current?.id !== state.result.id;
       current = state.result;
       $('score').textContent = current.scoreDisplay;
+      $('score').dataset.tone = current.score < 3 ? 'good' : current.score < 6 ? 'watch' : 'bad';
       $('summary').textContent = current.label + ' · ' + current.fileCount + ' 个文件 · 问题密度 ' + current.density;
       $('risk').textContent = current.highRisk ? '⚠ 已发现静态确认的高风险正确性或安全问题' : '';
       $('results').hidden = false;

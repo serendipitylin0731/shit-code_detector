@@ -1,20 +1,22 @@
 # Shit Code Detector
 
+<img src="media/logo.png" alt="Shit Code Detector 标志" width="88" height="88">
+
 作者：**_serendipity**
 
-Shit Code Detector 是一个 VS Code 插件。它先累计内部问题分，再通过 `f(x)=9x³/(x³+64000)` 输出 **0–9 分**的“shit 分”：越接近 9，代码问题越严重。支持整个工作区、手动选择的文件，以及 HTTPS Git 仓库。默认在本地运行确定性规则；启用 AI 后，可用 DeepSeek 等兼容 Chat Completions 的 API 按固定 A–E 评分表补充语义和架构审查。质量维度参考 [Done-0/fuck-u-code](https://github.com/Done-0/fuck-u-code)，具体取舍见 [REFERENCE.md](REFERENCE.md)。
+Shit Code Detector 是一个 VS Code 插件。它先累计内部问题分，再通过[五段转换函数](SCORING.md)输出 **0–9 分**的“shit 分”：越接近 9，代码问题越严重。支持当前项目、编辑器中正在打开的单个文件，以及 HTTPS Git 仓库。默认在本地运行确定性规则；保存 AI Key 后，可用 DeepSeek 等兼容 Chat Completions 的 API 按固定 A–E 评分表补充语义和架构审查。质量维度参考 [Done-0/fuck-u-code](https://github.com/Done-0/fuck-u-code)，具体取舍见 [REFERENCE.md](REFERENCE.md)。
 
 评分回归使用仓库内可重复的好、中、差三档样本；真实项目补充验证使用 [psf/requests](https://github.com/psf/requests)。测试数据和结果见 [VALIDATION.md](VALIDATION.md)。
 
 ## 功能
 
-- **左侧活动栏界面**：顶部显示 0–9 最终分，显示问题最多的文件和各类问题数量；每条问题只显示严重程度、类别、位置和理由，不显示单条加分。支持按文件与类别筛选、翻页和跳转。
-- **评分根目录**：直接扫描当前工作区的根目录；多根工作区使用第一个根目录，参与文件由该目录的规则文件决定。
-- **选择文件评分**：从文件对话框选择一个或多个代码文件，只评估文件本身。
+- **右侧辅助边栏界面**：顶部显示 0–9 最终分，提供当前项目、单文件、Git 仓库三目标切换；显示问题最多的文件和各类问题数量。每条问题只显示严重程度、类别、位置和理由，不显示单条加分。支持按文件与类别筛选、翻页和跳转。齿轮按钮收起 AI 设置。
+- **评分当前项目**：从当前项目根目录读取代码；多根工作区使用第一个根目录，参与文件由该目录的规则文件决定。
+- **评分当前文件**：直接分析编辑器里当前停留的单个代码文件，包括未保存修改；无需文件选择对话框。
 - **评分 HTTPS Git 仓库**：切换到 Git 仓库页后输入地址，可导入一份本地 `.shitcode` 或 `.shitcode_ignore` 筛选仓库文件；浅克隆到临时目录，扫描后删除，不执行仓库代码。
 - **本地静态分析**：检查运算符空格、注释格式、圈复杂度、认知复杂度、控制流嵌套、不可达代码、重复代码、循环依赖、异常处理、C/C++ 宏风险，以及 Python/JS/TS 的可确定语法与运行异常。格式分设聚合上限；文件长度、目录文件数和 `tmp` 等名称不单独判定代码质量。
 - **大项目可响应**：本地解析与评分在工作线程运行，可取消，不阻塞 VS Code 扩展主线程。
-- **根目录评分配置**：工作区和选定文件使用 `.shitcode` 允许列表或 `.shitcode_ignore` 排除列表；两者同时存在时只读取 `.shitcode`。路径写法、通配符、注释和 `!` 否定规则与 `.gitignore` 一致。`.gitignore` 本身不再决定文件是否参与评分。
+- **根目录评分配置**：当前项目和单文件使用 `.shitcode` 允许列表或 `.shitcode_ignore` 排除列表；两者同时存在时只读取 `.shitcode`。路径写法、通配符、注释和 `!` 否定规则与 `.gitignore` 一致。`.gitignore` 本身不再决定文件是否参与评分。
 - **可选 AI 审查**：预先固定 11 个文件条目和 6 个项目条目，覆盖逻辑、边界、资源、性能、架构与安全。每项给 A–E、N/A 或 U；A 为零分，B–E 按基础分乘固定权重，U 表示未完成。Key 保存在 VS Code SecretStorage，保存后每次评分自动调用 AI；报告列出每项等级、证据与覆盖数。完整标准见 [AI_RUBRIC.md](AI_RUBRIC.md)。
 - **逐项可追溯**：Markdown 报告列出分类、文件问题数及所有问题的严重程度；可导出不含完整源文件与 API 配置的 JSON 报告。问题说明可能引用短代码片段。
 
@@ -22,17 +24,17 @@ Shit Code Detector 是一个 VS Code 插件。它先累计内部问题分，再�
 
 ## 安装与运行
 
-需要 Node.js 20+、Git、VS Code 1.85+。如需 Python 语法、运算符与明显异常检查，还需本机 Python 3；没有 Python 时插件仍可运行其他规则，并在报告显示解析覆盖数。
+需要 Node.js 20+、Git、VS Code 1.106+。如需 Python 语法、运算符与明显异常检查，还需本机 Python 3；没有 Python 时插件仍可运行其他规则，并在报告显示解析覆盖数。
 
 ```bash
 npm install
 npm run compile
 ```
 
-在 VS Code 中打开本目录，按 **F5** 启动扩展开发宿主。点击左侧活动栏的 **Shit Code Detector** 图标，在“根目录／Git 仓库”之间切换；根目录页还可选择文件评分。也可以使用命令面板：
+在 VS Code 中打开本目录，按 **F5** 启动扩展开发宿主。从**右侧辅助边栏**打开 Shit Code Detector，在“当前项目／单文件／Git 仓库”之间切换。右上角齿轮可保存或更换 AI Key。也可以使用命令面板：
 
-1. `Shit Code Detector: 评分当前根目录`
-2. `Shit Code Detector: 选择文件评分`
+1. `Shit Code Detector: 评分当前项目`
+2. `Shit Code Detector: 评分当前文件`
 3. `Shit Code Detector: 评分 HTTPS Git 仓库`
 4. `Shit Code Detector: 导出 JSON 报告`
 
@@ -40,7 +42,7 @@ npm run compile
 
 ## 选择参与评分的文件
 
-在**当前工作区根目录**放置以下文件之一；多根工作区默认评分第一个根目录。选定文件模式先取用户选择的文件，再应用所属根目录的配置。两个配置文件同时存在时，`.shitcode` 优先，即使它是空文件也不会回退到 `.shitcode_ignore`。
+在**当前项目根目录**放置以下文件之一；多根工作区默认评分第一个根目录。单文件模式读取当前打开的代码文件，并应用它所属根目录的配置。两个配置文件同时存在时，`.shitcode` 优先，即使它是空文件也不会回退到 `.shitcode_ignore`。
 
 - `.shitcode`：允许列表，只有命中的有效代码文件参与评分。
 - `.shitcode_ignore`：排除列表，所有有效代码文件中只有命中的文件不参与评分。本仓库根目录已提供 [`.shitcode_ignore`](.shitcode_ignore)，可直接编辑。
@@ -66,7 +68,7 @@ dist/
 
 ## AI 设置
 
-点击侧边栏“安全保存或更换 Key”，输入 DeepSeek API Key。插件只将它存入 VS Code SecretStorage；不会在工作区创建配置 JSON。保存后下一次评分自动调用 AI，无需再开启开关。留空并确认可删除已保存的 Key。API 地址和模型可在 VS Code 设置中调整 `shitCodeDetector.ai.baseUrl` 与 `shitCodeDetector.ai.model`。
+点击右侧边栏右上角的**齿轮**，再点“保存或更换 API Key”输入 DeepSeek API Key。插件只将它存入 VS Code SecretStorage；不会在工作区创建配置 JSON。保存后下一次评分自动调用 AI，无需再开启开关。留空并确认可删除已保存的 Key。齿轮中还可打开 VS Code 设置，调整 `shitCodeDetector.ai.baseUrl` 与 `shitCodeDetector.ai.model`。
 
 开发者可用环境变量 `DEEPSEEK_API_KEY` 运行 `npm run test:ai`，也可继续使用本仓库已有的、被 Git 忽略的 `ai.local.json` 作为测试脚本的 Key 来源；环境变量优先，可选设置 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL`。该文件只供开发测试脚本读取，插件不会读取或创建它。这是显式调用真实 API 的测试，会产生 API 请求；普通 `npm test` 不调用网络 AI。
 

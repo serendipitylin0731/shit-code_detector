@@ -4,10 +4,10 @@ import { CodeFile, Finding, mergeAnalysis } from './analysis';
 import { analyzeInWorker } from './analyzeAsync';
 import { AiResult, analyzeWithAi } from './ai';
 import { AI_BASE_POINTS, AI_CRITERIA, AI_RUBRIC_VERSION } from './aiRubric';
-import { finalScore, formattedFinalScore } from './scoreTransform';
+import { finalScore, formattedFinalScore, SCORE_FORMULA } from './scoreTransform';
 import { summaryMetrics } from './summaryMetrics';
 import { compareGitBaseline, GitBaseline } from './gitBaseline';
-import { applyScanConfigToSelections, cloneRepository, collectUris, directoryEntries, ScanEntry, validateRepositoryUrl, workspaceEntries } from './collect';
+import { cloneRepository, collectActiveDocument, collectUris, directoryEntries, ScanEntry, validateRepositoryUrl, workspaceEntries } from './collect';
 import { ScanConfig, selectScanConfig } from './scanConfig';
 import { dashboardFindings, fileScores } from './dashboardData';
 import { DashboardResult, SidebarAction, SidebarProvider } from './sidebar';
@@ -23,14 +23,21 @@ export function activate(context: vscode.ExtensionContext): void {
   let reportId = 0;
   let running = false;
   let repositoryConfig: ScanConfig | undefined;
-  const sidebar = new SidebarProvider(handleSidebarAction);
+  let lastEditor = vscode.window.activeTextEditor;
+  const sidebar = new SidebarProvider(handleSidebarAction, context.extensionUri);
+  sidebar.setActiveFileName(lastEditor ? path.basename(lastEditor.document.uri.path) : undefined);
   void context.secrets.get(secretKey).then(key => sidebar.setApiKeyConfigured(Boolean(key)), () => undefined);
-  context.subscriptions.push(output, vscode.window.registerWebviewViewProvider(SidebarProvider.viewId, sidebar));
+  context.subscriptions.push(output, vscode.window.registerWebviewViewProvider(SidebarProvider.viewId, sidebar),
+    vscode.window.onDidChangeActiveTextEditor(editor => {
+      if (editor) lastEditor = editor;
+      sidebar.setActiveFileName(lastEditor ? path.basename(lastEditor.document.uri.path) : undefined);
+    }));
 
   async function run(scope: Scope, target?: { url?: string }): Promise<void> {
     if (running) { vscode.window.showInformationMessage('Shit Code Detector：当前评分尚未完成。'); return; }
     running = true;
     let cleanup: (() => Promise<void>) | undefined;
+    const editor = scope === 'files' ? (vscode.window.activeTextEditor ?? lastEditor) : undefined;
     try {
       if (scope === 'workspace' && !vscode.workspace.isTrusted) throw new Error('请先信任当前工作区，再扫描整个项目。');
       sidebar.setBusy(true, '正在准备评分…');
@@ -39,23 +46,23 @@ export function activate(context: vscode.ExtensionContext): void {
         let entries: ScanEntry[];
         let label: string;
         let selectedWorkspace: vscode.WorkspaceFolder | undefined;
+        let singleFileCollection: Awaited<ReturnType<typeof collectActiveDocument>> | undefined;
+        const config = vscode.workspace.getConfiguration('shitCodeDetector');
+        const maxFileBytes = config.get<number>('maxFileBytes', 524288);
         if (scope === 'workspace') {
           selectedWorkspace = vscode.workspace.workspaceFolders?.[0];
           if (!selectedWorkspace) throw new Error('请先打开一个工作区根目录。');
           entries = await workspaceEntries(token, selectedWorkspace);
-          label = `根目录：${selectedWorkspace.name}`;
+          label = `当前项目：${selectedWorkspace.name}`;
         } else if (scope === 'files') {
-          const selected = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false, canSelectMany: true, openLabel: '选择要评分的代码文件' });
-          if (!selected?.length) { sidebar.setBusy(false); return; }
-          entries = selected.map(uri => ({ uri, path: path.basename(uri.fsPath) }));
-          selectedWorkspace = vscode.workspace.getWorkspaceFolder(selected[0]);
-          // 重名文件使用完整路径区分，以免报告中的定位发生碰撞。
-          const counts = new Map<string, number>();
-          for (const entry of entries) counts.set(entry.path, (counts.get(entry.path) ?? 0) + 1);
-          entries = entries.map(entry => counts.get(entry.path)! > 1 ? { ...entry, path: entry.uri.fsPath.replaceAll('\\', '/') } : entry);
-          entries = await applyScanConfigToSelections(entries);
-          if (!entries.length) throw new Error('所选文件没有匹配根目录的 .shitcode，或已被 .shitcode_ignore 排除。');
-          label = '选定文件';
+          if (!editor) throw new Error('请先在编辑器中打开要评分的代码文件。');
+          if (!vscode.window.visibleTextEditors.some(item => item.document.uri.toString() === editor.document.uri.toString())) {
+            throw new Error('请先在编辑器中打开要评分的代码文件。');
+          }
+          singleFileCollection = await collectActiveDocument(editor.document, maxFileBytes);
+          entries = [];
+          selectedWorkspace = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+          label = `当前文件：${path.basename(editor.document.uri.path)}${editor.document.isDirty ? '（含未保存修改）' : ''}`;
         } else {
           const input = target?.url ?? await vscode.window.showInputBox({ prompt: '输入公开 HTTPS Git 仓库地址', placeHolder: 'https://github.com/owner/repository.git', ignoreFocusOut: true });
           if (!input && target?.url === undefined) { sidebar.setBusy(false); return; }
@@ -68,10 +75,8 @@ export function activate(context: vscode.ExtensionContext): void {
           label = url;
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
-        const config = vscode.workspace.getConfiguration('shitCodeDetector');
-        const maxFileBytes = config.get<number>('maxFileBytes', 524288);
-        progress.report({ message: `读取 ${entries.length} 个候选文件` });
-        const collection = await collectUris(entries, maxFileBytes, token, scope === 'files');
+        progress.report({ message: `读取 ${singleFileCollection ? 1 : entries.length} 个候选文件` });
+        const collection = singleFileCollection ?? await collectUris(entries, maxFileBytes, token);
         if (scope === 'repository') collection.files.forEach(file => { file.uri = undefined; });
         if (!collection.files.length) throw new Error('没有找到可评分的代码文件。请检查 .shitcode／.shitcode_ignore、文件类型或排除规则。');
         progress.report({ message: `运行本地规则（${collection.files.length} 个文件）` });
@@ -107,8 +112,8 @@ export function activate(context: vscode.ExtensionContext): void {
         const metrics = summaryMetrics(result, ai?.assessments.filter(item => item.grade === 'U').length ?? 0);
         const report = makeReport(label, scope, result.score, result.categoryScores, result.findings, collection.files, collection.skipped, result.checkCoverage, aiEnabled, ai, metrics, baseline);
         latestReport = report;
-        latestJson = JSON.stringify({ schemaVersion: 4, target: label, scope, score: finalScore(result.score), rawScore: result.score,
-          scoreFormula: '9*x^3/(x^3+64000)', fileCount: collection.files.length, categoryContributions: result.categoryScores,
+        latestJson = JSON.stringify({ schemaVersion: 5, target: label, scope, score: finalScore(result.score), rawScore: result.score,
+          scoreFormula: SCORE_FORMULA, fileCount: collection.files.length, categoryContributions: result.categoryScores,
           metrics,
           baseline: baseline ? { available: baseline.baselineAvailable, changedPaths: baseline.changedPaths, introduced: baseline.introduced.map(({ points, ...finding }) => finding), note: baseline.note } : undefined,
           checkCoverage: result.checkCoverage, fileIssueCounts: fileScores(result.findings, collection.files).map(({ score, ...entry }) => entry),
@@ -187,6 +192,7 @@ export function activate(context: vscode.ExtensionContext): void {
         case 'importRepositoryConfig': await importRepositoryConfig(); break;
         case 'clearRepositoryConfig': repositoryConfig = undefined; sidebar.setRepositoryConfigName(undefined); break;
         case 'setApiKey': await vscode.commands.executeCommand('shitCodeDetector.setApiKey'); break;
+        case 'openSettings': await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:serendipitylin0731.shit-code-detector'); break;
         case 'openReport': await showReport(); break;
         case 'exportJson': await exportJson(); break;
         case 'openFinding': {
@@ -233,7 +239,7 @@ function makeReport(label: string, scope: Scope, rawScore: number, categoryScore
   const lines = [
     '# Shit Code Detector 评分报告', '',
     `- 对象：${clean(label)}`,
-    `- 模式：${scope === 'workspace' ? '根目录' : scope === 'files' ? '选定文件' : 'HTTPS Git 仓库'}`,
+    `- 模式：${scope === 'workspace' ? '当前项目' : scope === 'files' ? '当前文件' : 'HTTPS Git 仓库'}`,
     `- 最终分：**${formattedFinalScore(rawScore)} / 9**（越高越 shit）`,
     `- 问题密度：${metrics.issueDensity.toFixed(1)} / 千行有效代码（小项目按 200 行平滑）`,
     `- 高风险状态：${metrics.highRisk ? '发现静态确认的高风险正确性或安全问题' : '未发现静态确认的高风险问题'}`,
@@ -278,6 +284,6 @@ function makeReport(label: string, scope: Scope, rawScore: number, categoryScore
     }
   }
   if (ai?.errors.length) lines.push('', '## AI 未完成项', '', ...ai.errors.map(error => `- ${clean(error)}`));
-  lines.push('', '## 评分说明', '', '内部累计值 x = 本地规则分类聚合值（维护性信号含规模平滑，各类上限和系数见 SCORING.md）+ Σ（有效 AI 分项基础分 × 固定条目权重）；最终分 f(x)=9x³/(x³+64000)。AI 条目不受本地类别系数与规模平滑影响。A 不计分；U 表示未审查完成，N/A 表示不适用。静态规则匹配不等于运行测试。详见 `SCORING.md` 与 `AI_RUBRIC.md`。', '');
+  lines.push('', '## 评分说明', '', '内部累计值 x = 本地规则分类聚合值（维护性信号含规模平滑，各类上限和系数见 SCORING.md）+ Σ（有效 AI 分项基础分 × 固定条目权重）；最终分按 `SCORING.md` 中的五段函数转换，断点为 0.1、45、150、250。AI 条目不受本地类别系数与规模平滑影响。A 不计分；U 表示未审查完成，N/A 表示不适用。静态规则匹配不等于运行测试。详见 `SCORING.md` 与 `AI_RUBRIC.md`。', '');
   return lines.join('\n');
 }

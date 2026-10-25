@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import os from 'node:os';
 import path from 'node:path';
 
-test('工作区与选定文件遵循新配置，旧 .gitignore 不参与筛选', async () => {
+test('当前项目与当前文件遵循新配置，旧 .gitignore 不参与筛选', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'scd-scan-config-'));
   const moduleLoader = require('node:module') as { _load: (request: string, parent: unknown, isMain: boolean) => unknown };
   const originalLoad = moduleLoader._load;
@@ -30,7 +30,7 @@ test('工作区与选定文件遵循新配置，旧 .gitignore 不参与筛选',
     }
   };
   moduleLoader._load = (request, parent, isMain) => request === 'vscode' ? vscode : originalLoad(request, parent, isMain);
-  const { workspaceEntries, collectUris, applyScanConfigToSelections } = require('../src/collect') as typeof import('../src/collect');
+  const { workspaceEntries, collectUris, applyScanConfigToSelections, collectActiveDocument } = require('../src/collect') as typeof import('../src/collect');
   moduleLoader._load = originalLoad;
   try {
     await mkdir(path.join(root, 'src'));
@@ -44,6 +44,9 @@ test('工作区与选定文件遵循新配置，旧 .gitignore 不参与筛选',
     await writeFile(path.join(root, 'node_modules', 'pkg', 'index.js'), 'const value = 3;\n');
     const included = await collectUris(await workspaceEntries(), 10000);
     assert.deepEqual(included.files.map(file => file.path).sort(), ['node_modules/pkg/index.js', 'private/hidden.py', 'src/main.py']);
+    const currentDocument = { uri: uri(path.join(root, 'src', 'main.py')), isUntitled: false, getText: () => 'print("unsaved editor snapshot")\n' };
+    const active = await collectActiveDocument(currentDocument as never, 10000);
+    assert.equal(active.files[0].content, 'print("unsaved editor snapshot")\n');
     const allowedSelections = await applyScanConfigToSelections([
       { uri: uri(path.join(root, 'src', 'main.py')) as never, path: 'main.py' },
       { uri: uri(path.join(root, 'private', 'hidden.py')) as never, path: 'hidden.py' }
@@ -59,6 +62,7 @@ test('工作区与选定文件遵循新配置，旧 .gitignore 不参与筛选',
       { uri: uri(path.join(root, 'private', 'hidden.py')) as never, path: 'hidden.py' }
     ]);
     assert.deepEqual(selected.map(file => file.path), ['main.py']);
+    await assert.rejects(collectActiveDocument({ uri: uri(path.join(root, 'private', 'hidden.py')), isUntitled: false, getText: () => 'print(2)' } as never, 10000), /排除/);
 
     visited.length = 0;
     await writeFile(path.join(root, '.shitcode_ignore'), 'private/\nnode_modules/\n');

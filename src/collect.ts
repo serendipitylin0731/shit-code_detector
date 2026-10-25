@@ -83,6 +83,20 @@ export async function applyScanConfigToSelections(entries: ScanEntry[]): Promise
   return result;
 }
 
+/** Score the visible editor snapshot, including unsaved changes. */
+export async function collectActiveDocument(document: vscode.TextDocument, maxFileBytes: number): Promise<Collection> {
+  if (document.isUntitled) throw new Error('请先保存当前文件，再进行单文件评分。');
+  const entry: ScanEntry = { uri: document.uri, path: path.basename(document.uri.path) };
+  const selected = await applyScanConfigToSelections([entry]);
+  if (!selected.length) throw new Error('当前文件未被所属项目的 .shitcode 选中，或已被 .shitcode_ignore 排除。');
+  const skipped = { unsupported: 0, large: 0, binary: 0, unreadable: 0 };
+  if (isSensitiveConfig(entry.path) || !languageOf(entry.path)) { skipped.unsupported++; return { files: [], skipped }; }
+  const content = document.getText();
+  if (Buffer.byteLength(content, 'utf8') > maxFileBytes) { skipped.large++; return { files: [], skipped }; }
+  if (content.includes('\0')) { skipped.binary++; return { files: [], skipped }; }
+  return { files: [{ path: entry.path, language: languageOf(entry.path)!, content, uri: document.uri.toString() }], skipped };
+}
+
 export async function directoryEntries(root: string, token?: vscode.CancellationToken, config?: ScanConfig): Promise<ScanEntry[]> {
   const relatives = await listCodePaths(root, () => { if (token?.isCancellationRequested) throw new vscode.CancellationError(); }, config);
   return relatives.map(relative => ({ uri: vscode.Uri.file(path.join(root, relative)), path: relative, configured: config?.mode !== undefined && config.mode !== 'all' }));
