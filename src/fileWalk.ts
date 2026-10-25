@@ -7,9 +7,12 @@ export async function listCodePaths(root: string, checkCancelled?: () => void, c
   onDiscovered?: (count: number) => void): Promise<string[]> {
   const entries: string[] = [];
   const configured = config && config.mode !== 'all';
+  let visited = 0;
   async function visit(directory: string): Promise<void> {
     checkCancelled?.();
     for (const item of await readdir(directory, { withFileTypes: true })) {
+      if (++visited % 32 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      checkCancelled?.();
       const absolute = path.join(directory, item.name);
       const relative = path.relative(root, absolute).replaceAll('\\', '/');
       if (item.isDirectory()) {

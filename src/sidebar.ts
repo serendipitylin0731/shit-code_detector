@@ -73,6 +73,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   setError(message: string): void { this.busy = false; this.message = message; this.progress = undefined; this.sendState(); }
   setResult(result: DashboardResult): void { this.result = result; this.busy = false; this.message = '评分完成'; this.progress = undefined; this.sendState(true); }
   async reveal(): Promise<void> {
+    if (this.view?.visible) return;
     if (!this.view) await vscode.commands.executeCommand('workbench.view.extension.shitCodeDetectorRight');
     this.view?.show(false);
   }
@@ -219,7 +220,7 @@ function html(webview: vscode.Webview, logoUrl: string): string {
   $('openSettings').onclick = () => send('openSettings');
   $('openReport').onclick = () => send('openReport');
   $('exportJson').onclick = () => send('exportJson');
-  $('cancelScan').onclick = () => { $('cancelScan').disabled = true; send('cancelScan'); };
+  $('cancelScan').onclick = () => { $('cancelScan').disabled = true; $('progressTitle').textContent = '正在取消评分…'; send('cancelScan'); };
   $('categoryFilter').onchange = () => { visibleCount = pageSize; renderFindings(); };
   $('fileFilter').onchange = () => { visibleCount = pageSize; renderFileVoidToggle(); renderFindings(); };
   $('fileVoidToggle').onclick = () => { const path = $('fileFilter').value; if (path !== 'all') send('toggleFileVoid', { path }); };

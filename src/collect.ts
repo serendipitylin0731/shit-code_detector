@@ -19,6 +19,7 @@ export async function collectUris(entries: ScanEntry[], maxFileBytes: number, to
   onProgress?: (completed: number, total: number) => void): Promise<Collection> {
   const collection: Collection = { files: [], skipped: { unsupported: 0, large: 0, binary: 0, unreadable: 0 } };
   for (const [index, entry] of entries.entries()) {
+    if (index > 0 && index % 32 === 0) await new Promise<void>(resolve => setImmediate(resolve));
     if (token?.isCancellationRequested) throw new vscode.CancellationError();
     if (isSensitiveConfig(entry.path) || !((explicitSelection || entry.configured) ? Boolean(languageOf(entry.path)) : isEligible(entry.path))) {
       collection.skipped.unsupported++; onProgress?.(index + 1, entries.length); continue;
@@ -46,12 +47,14 @@ export async function workspaceEntries(token?: vscode.CancellationToken, selecte
   if (!folders?.length) throw new Error('请先打开一个工作区。');
   const entries: ScanEntry[] = [];
   const multiRoot = folders.length > 1 && !selectedFolder;
+  let visited = 0;
   for (const folder of selectedFolder ? [selectedFolder] : folders) {
     const config = await readRootScanConfig(folder.uri);
     const configured = config.mode !== 'all';
     async function visit(directory: vscode.Uri, relativeDirectory: string): Promise<void> {
       if (token?.isCancellationRequested) throw new vscode.CancellationError();
       for (const [name, type] of await vscode.workspace.fs.readDirectory(directory)) {
+        if (++visited % 32 === 0) await new Promise<void>(resolve => setImmediate(resolve));
         if (token?.isCancellationRequested) throw new vscode.CancellationError();
         if (type & vscode.FileType.SymbolicLink) continue;
         const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;

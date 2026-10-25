@@ -48,12 +48,14 @@ export function activate(context: vscode.ExtensionContext): void {
     try {
       if (scope === 'workspace' && !vscode.workspace.isTrusted) throw new Error('请先信任当前工作区，再扫描整个项目。');
       sidebar.setBusy(true, '正在准备评分…');
-      await sidebar.reveal();
+      void sidebar.reveal().catch(error => output.appendLine(`打开评分侧边栏失败：${error instanceof Error ? error.message : String(error)}`));
       const progress = { report: (update: { message: string; percentage?: number }) => {
         if (!token.isCancellationRequested) sidebar.setBusy(true, update.message, update.percentage);
       } };
-      await (async () => {
+      const executeScan = async (): Promise<void> => {
         progress.report({ message: '查找代码文件…' });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        if (token.isCancellationRequested) throw new vscode.CancellationError();
         let entries: ScanEntry[];
         let label: string;
         let selectedWorkspace: vscode.WorkspaceFolder | undefined;
@@ -208,7 +210,8 @@ export function activate(context: vscode.ExtensionContext): void {
         };
         publish();
         output.appendLine(`${new Date().toISOString()} ${label}: ${formattedFinalScore(fullResult.score)} / 9，${collection.files.length} 个文件`);
-      });
+      };
+      await executeScan();
     } catch (error) {
       if (error instanceof vscode.CancellationError) sidebar.setBusy(false, '已取消评分');
       else {
