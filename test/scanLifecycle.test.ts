@@ -100,6 +100,7 @@ test('侧边栏打开未返回时扫描仍启动，取消能结束正在等待�
   const scanProgress = progressValues.slice(firstProgressIndex);
   assert.equal(scanProgress[0], 0);
   assert.ok(scanProgress.includes(10));
+  assert.ok(scanProgress.includes(20));
   assert.equal(scanProgress.at(-1), 100);
   assert.ok(scanProgress.every((value, index) => index === 0 || value >= scanProgress[index - 1]));
   mode = 'ai';
@@ -108,7 +109,7 @@ test('侧边栏打开未返回时扫描仍启动，取消能结束正在等待�
   const aiProgress = progressValues.slice(firstAiProgressIndex);
   assert.ok(messages.includes('AI 代码片段 1/2'));
   assert.ok(messages.includes('AI 项目结构 1/2'));
-  for (const percent of [10, 28, 46, 64, 82, 100]) assert.ok(aiProgress.includes(percent), `缺少总进度 ${percent}%：${aiProgress}`);
+  for (const percent of [10, 20, 40, 60, 80, 100]) assert.ok(aiProgress.includes(percent), `缺少总进度 ${percent}%：${aiProgress}`);
   assert.equal(aiProgress.at(-1), 100);
   assert.ok(aiProgress.every((value, index) => index === 0 || value >= aiProgress[index - 1]));
 });

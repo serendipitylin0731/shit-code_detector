@@ -1,10 +1,9 @@
 export type ScanScope = 'workspace' | 'files' | 'repository';
 export type ScanStage = 'discovery' | 'read' | 'local' | 'baseline' | 'aiFiles' | 'aiProject' | 'report';
 
-/** Reading owns 0–10%; each subsequent file or AI request owns an equal share of 10–100%. */
+/** Reading and local scoring own 10% each; AI requests share the remaining 80%. */
 export class ScanProgress {
   private current = 0;
-  private localCount = 0;
   private aiFileCount = 0;
   private aiProjectCount = 0;
 
@@ -12,7 +11,6 @@ export class ScanProgress {
     if (![localFiles, aiFileRequests, aiProjectRequests].every(value => Number.isSafeInteger(value) && value >= 0) || localFiles < 1) {
       throw new Error('评分进度需要有效的任务数量。');
     }
-    this.localCount = localFiles;
     this.aiFileCount = aiFileRequests;
     this.aiProjectCount = aiProjectRequests;
   }
@@ -23,12 +21,13 @@ export class ScanProgress {
     const fraction = total !== undefined && total > 0 && completed !== undefined
       ? Math.max(0, Math.min(1, completed / total)) : 0;
     if (stage === 'read') this.current = Math.max(this.current, 10 * fraction);
+    else if (stage === 'local') this.current = Math.max(this.current, 10 + 10 * fraction);
     else {
-      const work = this.localCount + this.aiFileCount + this.aiProjectCount;
+      const work = this.aiFileCount + this.aiProjectCount;
       if (!work) return this.current;
-      const before = stage === 'local' ? 0 : stage === 'aiFiles' ? this.localCount : this.localCount + this.aiFileCount;
-      const count = stage === 'local' ? this.localCount : stage === 'aiFiles' ? this.aiFileCount : this.aiProjectCount;
-      this.current = Math.max(this.current, 10 + 90 * (before + count * fraction) / work);
+      const before = stage === 'aiFiles' ? 0 : this.aiFileCount;
+      const count = stage === 'aiFiles' ? this.aiFileCount : this.aiProjectCount;
+      this.current = Math.max(this.current, 20 + 80 * (before + count * fraction) / work);
     }
     return this.current;
   }

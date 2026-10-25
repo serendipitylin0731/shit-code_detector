@@ -18,7 +18,8 @@ test('蓝色进度条对所有目标使用单调的总进度，完成时到 100%
       values.push(plan.stage('report'), plan.complete());
       assert.equal(values[0], 0);
       assert.equal(values[4], 10);
-      assert.equal(values.at(-2), 100);
+      assert.equal(values[7], 20);
+      assert.equal(values.at(-2), aiEnabled ? 100 : 20);
       assert.equal(values.at(-1), 100);
       assert.ok(values.every((value, index) => index === 0 || value >= values[index - 1]), `${scope}, AI=${aiEnabled}: ${values}`);
       assert.ok(values.every(value => value <= 100));
@@ -35,10 +36,10 @@ test('未知时长阶段保留总进度，当前阶段计数不能令蓝条回�
   assert.equal(plan.stage('read', 2, 2), 10);
   plan.configure(2, 3, 1);
   assert.equal(plan.stage('local', 0, 2), 10);
-  assert.equal(plan.stage('local', 1, 2), 25);
-  assert.equal(plan.stage('local', 2, 2), 40);
-  assert.equal(plan.stage('baseline', 1, 1), 40);
-  assert.equal(plan.stage('aiFiles', 1, 3), 55);
-  assert.equal(plan.stage('aiFiles', 3, 3), 85);
+  assert.equal(plan.stage('local', 1, 2), 15);
+  assert.equal(plan.stage('local', 2, 2), 20);
+  assert.equal(plan.stage('baseline', 1, 1), 20);
+  assert.equal(plan.stage('aiFiles', 1, 3), 40);
+  assert.equal(plan.stage('aiFiles', 3, 3), 80);
   assert.equal(plan.stage('aiProject', 1, 1), 100);
 });
