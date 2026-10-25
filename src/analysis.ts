@@ -92,7 +92,8 @@ function endsWithOperator(code: string, language: string): boolean {
   return /(?:[+*/%=<>!&|^~?-]|\b(?:and|or|not|in|is|as|instanceof))$/i.test(code);
 }
 
-export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = true): Analysis {
+export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = true,
+  onProgress?: (completed: number, total: number, phase: 'files' | 'finalize') => void): Analysis {
   const findings: Finding[] = [];
   const add = (file: string, line: number | undefined, category: Category, rule: string, points: number, message: string): void => {
     findings.push({ path: file, line, category, rule, points, message, source: 'rules' });
@@ -102,7 +103,7 @@ export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = 
   let jsTsChecked = 0;
   let jsonChecked = 0;
   const parseFailurePaths: string[] = [];
-  for (const file of files) {
+  for (const [fileIndex, file] of files.entries()) {
     const lines = file.content.split(/\r?\n/);
     const nonblank = lines.filter(line => line.trim().length > 0);
     const tabLines = nonblank.filter(line => /^\t+\S/.test(line)).length;
@@ -149,7 +150,9 @@ export function analyze(files: CodeFile[], extra: Finding[] = [], projectMode = 
       blankRun = line.trim() ? 0 : blankRun + 1;
       if (blankRun >= 5) add(file.path, number, 'style', 'blank-run', 1, '连续空行超过 4 行');
     }
+    onProgress?.(fileIndex + 1, files.length, 'files');
   }
+  onProgress?.(files.length, files.length, 'finalize');
 
   for (const [styleGroup, group] of indentByLanguage) {
     if (!group.tabs.length || !group.spaces.length) continue;

@@ -71,9 +71,11 @@ test('Python 导入环忽略 TYPE_CHECKING 与包入口转发', () => {
 test('工作线程评分与直接评分一致，并响应预先取消', async () => {
   const files = [file('src/main.py', 'def run(value):\n    return value / 0\n')];
   const direct = analyze(files);
-  const worker = await analyzeInWorker(files, true);
+  const progress: { completed: number; total: number; phase: string }[] = [];
+  const worker = await analyzeInWorker(files, true, undefined, (completed, total, phase) => progress.push({ completed, total, phase }));
   assert.deepEqual(worker.findings, direct.findings);
   assert.equal(worker.score, direct.score);
+  assert.deepEqual(progress, [{ completed: 1, total: 1, phase: 'files' }, { completed: 1, total: 1, phase: 'finalize' }]);
   const controller = new AbortController(); controller.abort();
   await assert.rejects(analyzeInWorker(files, true, controller.signal), /取消/);
   const running = new AbortController();

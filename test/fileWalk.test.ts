@@ -16,6 +16,9 @@ test('仓库扫描不再使用根与嵌套 .gitignore 决定是否参与评分',
     await writeFile(path.join(root, 'src', 'hidden.py'), 'print(2)\n');
     await writeFile(path.join(root, 'src', 'note.tmp'), 'ignored\n');
     await writeFile(path.join(root, 'private', 'generated.py'), 'print(3)\n');
-    assert.deepEqual((await listCodePaths(root)).sort(), ['private/generated.py', 'src/hidden.py', 'src/keep.py']);
+    const discovered: number[] = [];
+    assert.deepEqual((await listCodePaths(root, undefined, undefined, count => discovered.push(count))).sort(),
+      ['private/generated.py', 'src/hidden.py', 'src/keep.py']);
+    assert.deepEqual(discovered, [1, 2, 3]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

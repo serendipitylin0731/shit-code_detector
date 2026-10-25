@@ -53,17 +53,25 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!token.isCancellationRequested) sidebar.setBusy(true, update.message, update.percentage);
       } };
       await (async () => {
-        progress.report({ message: '收集代码文件' });
+        progress.report({ message: '查找代码文件…' });
         let entries: ScanEntry[];
         let label: string;
         let selectedWorkspace: vscode.WorkspaceFolder | undefined;
         let singleFileCollection: Awaited<ReturnType<typeof collectActiveDocument>> | undefined;
         const config = vscode.workspace.getConfiguration('shitCodeDetector');
         const maxFileBytes = config.get<number>('maxFileBytes', 0);
+        let lastDiscoveryUpdate = 0;
+        const onDiscovered = (count: number): void => {
+          const now = Date.now();
+          if (count === 1 || now - lastDiscoveryUpdate >= 150) {
+            progress.report({ message: `已找到 ${count} 个候选文件…` });
+            lastDiscoveryUpdate = now;
+          }
+        };
         if (scope === 'workspace') {
           selectedWorkspace = vscode.workspace.workspaceFolders?.[0];
           if (!selectedWorkspace) throw new Error('请先打开一个工作区根目录。');
-          entries = await workspaceEntries(token, selectedWorkspace);
+          entries = await workspaceEntries(token, selectedWorkspace, onDiscovered);
           label = `当前项目：${selectedWorkspace.name}`;
         } else if (scope === 'files') {
           if (!editor) throw new Error('请先在编辑器中打开要评分的代码文件。');
@@ -82,32 +90,38 @@ export function activate(context: vscode.ExtensionContext): void {
           progress.report({ message: '克隆 Git 仓库' });
           const clone = await cloneRepository(url, token);
           cleanup = clone.cleanup;
-          entries = await directoryEntries(clone.directory, token, repositoryConfig);
+          entries = await directoryEntries(clone.directory, token, repositoryConfig, onDiscovered);
           label = url;
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
-        progress.report({ message: `读取 ${singleFileCollection ? 1 : entries.length} 个候选文件` });
+        const candidateCount = singleFileCollection ? 1 : entries.length;
+        progress.report({ message: `读取代码文件 0/${candidateCount}`, percentage: 0 });
         const collection = singleFileCollection ?? await collectUris(entries, maxFileBytes, token, false,
           (completed, total) => progress.report({ message: `读取代码文件 ${completed}/${total}`, percentage: total ? 100 * completed / total : 0 }));
+        if (singleFileCollection) progress.report({ message: '读取代码文件 1/1', percentage: 100 });
         if (token.isCancellationRequested) throw new vscode.CancellationError();
         if (scope === 'repository') collection.files.forEach(file => { file.uri = undefined; });
         if (!collection.files.length) throw new Error('没有找到可评分的代码文件。请检查 .shitcode／.shitcode_ignore、文件类型或排除规则。');
-        progress.report({ message: `运行本地规则（${collection.files.length} 个文件）` });
+        progress.report({ message: `本地规则 0/${collection.files.length} 个文件`, percentage: 0 });
         const projectMode = scope !== 'files';
         const analysisController = new AbortController();
         const analysisSubscription = token.onCancellationRequested(() => analysisController.abort());
         let result;
-        try { result = await analyzeInWorker(collection.files, projectMode, analysisController.signal); }
+        try { result = await analyzeInWorker(collection.files, projectMode, analysisController.signal, (completed, total, phase) => {
+          if (phase === 'finalize') progress.report({ message: '汇总本地与跨文件检查…' });
+          else progress.report({ message: `本地规则 ${completed}/${total} 个文件`, percentage: total ? 100 * completed / total : 0 });
+        }); }
         catch (error) { if (token.isCancellationRequested) throw new vscode.CancellationError(); throw error; }
         finally { analysisSubscription.dispose(); }
         const baselineRoot = selectedWorkspace?.uri.fsPath;
+        if (scope === 'workspace' && baselineRoot) progress.report({ message: '比对 Git 基线…' });
         const baseline = scope === 'workspace' && baselineRoot ? await compareGitBaseline(baselineRoot, result) : undefined;
         if (token.isCancellationRequested) throw new vscode.CancellationError();
         let ai: AiResult | undefined;
         const apiKey = await context.secrets.get(secretKey);
         const aiEnabled = Boolean(apiKey);
         if (apiKey) {
-          progress.report({ message: '请求 AI 审查' });
+          progress.report({ message: '准备 AI 审查…' });
           const controller = new AbortController();
           const subscription = token.onCancellationRequested(() => controller.abort());
           try {
@@ -123,6 +137,7 @@ export function activate(context: vscode.ExtensionContext): void {
           result = mergeAnalysis(result, ai.findings);
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
+        progress.report({ message: '整理评分结果…' });
         const fullResult = result;
         const scanId = ++reportId;
         const voidModel = buildVoidScoreModel(fullResult);

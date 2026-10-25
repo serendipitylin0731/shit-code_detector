@@ -40,7 +40,8 @@ export async function collectUris(entries: ScanEntry[], maxFileBytes: number, to
   return collection;
 }
 
-export async function workspaceEntries(token?: vscode.CancellationToken, selectedFolder?: vscode.WorkspaceFolder): Promise<ScanEntry[]> {
+export async function workspaceEntries(token?: vscode.CancellationToken, selectedFolder?: vscode.WorkspaceFolder,
+  onDiscovered?: (count: number) => void): Promise<ScanEntry[]> {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders?.length) throw new Error('请先打开一个工作区。');
   const entries: ScanEntry[] = [];
@@ -64,6 +65,7 @@ export async function workspaceEntries(token?: vscode.CancellationToken, selecte
           if (!config.allows(relative)) continue;
           const prefix = multiRoot ? `${folder.name}/` : '';
           entries.push({ uri, path: prefix + relative, configured });
+          onDiscovered?.(entries.length);
         }
       }
     }
@@ -102,8 +104,9 @@ export async function collectActiveDocument(document: vscode.TextDocument, maxFi
   return { files: [{ path: entry.path, language: languageOf(entry.path)!, content, uri: document.uri.toString() }], skipped };
 }
 
-export async function directoryEntries(root: string, token?: vscode.CancellationToken, config?: ScanConfig): Promise<ScanEntry[]> {
-  const relatives = await listCodePaths(root, () => { if (token?.isCancellationRequested) throw new vscode.CancellationError(); }, config);
+export async function directoryEntries(root: string, token?: vscode.CancellationToken, config?: ScanConfig,
+  onDiscovered?: (count: number) => void): Promise<ScanEntry[]> {
+  const relatives = await listCodePaths(root, () => { if (token?.isCancellationRequested) throw new vscode.CancellationError(); }, config, onDiscovered);
   return relatives.map(relative => ({ uri: vscode.Uri.file(path.join(root, relative)), path: relative, configured: config?.mode !== undefined && config.mode !== 'all' }));
 }
 

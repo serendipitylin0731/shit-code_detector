@@ -3,9 +3,16 @@ import { analyze, CodeFile } from './analysis';
 
 const input = workerData as { files: CodeFile[]; projectMode: boolean };
 try {
-  const result = analyze(input.files, [], input.projectMode);
+  let lastPosted = 0;
+  const result = analyze(input.files, [], input.projectMode, (completed, total, phase) => {
+    const now = Date.now();
+    if (phase === 'finalize' || completed === total || completed === 1 || now - lastPosted >= 100) {
+      parentPort!.postMessage({ type: 'progress', completed, total, phase });
+      lastPosted = now;
+    }
+  });
   // The extension already owns the code text; return only results to limit copies.
-  parentPort!.postMessage({ ok: true, result: { ...result, files: undefined } });
+  parentPort!.postMessage({ type: 'result', ok: true, result: { ...result, files: undefined } });
 } catch (error) {
-  parentPort!.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  parentPort!.postMessage({ type: 'result', ok: false, error: error instanceof Error ? error.message : String(error) });
 }

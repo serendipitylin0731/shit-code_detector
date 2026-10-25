@@ -67,6 +67,7 @@ export async function analyzeWithAi(analysis: Analysis, options: AiOptions, proj
   const jobs = analysis.files.flatMap(file => splitAiFile(file, options.maxCharsPerRequest).map((chunk, index, parts) =>
     ({ file, chunk, index, count: parts.length })));
   result.fileRequests = jobs.length;
+  options.onProgress?.(0, jobs.length);
   const responses: ({ raw: RawAssessment[] } | { error: unknown } | undefined)[] = new Array(jobs.length);
   let nextJob = 0;
   let completed = 0;
@@ -130,6 +131,7 @@ export async function analyzeWithAi(analysis: Analysis, options: AiOptions, proj
     })));
     const projectBatches = packProjectSummaries(projectInputs, projectBudget);
     result.projectRequests = projectBatches.length;
+    options.onProjectProgress?.(0, projectBatches.length);
     const parts: AiResult[] = [];
     let complete = true;
     for (let index = 0; index < projectBatches.length && !signal?.aborted; index++) {

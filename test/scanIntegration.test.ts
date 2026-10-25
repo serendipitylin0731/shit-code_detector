@@ -42,8 +42,10 @@ test('当前项目与当前文件遵循新配置，旧 .gitignore 不参与筛�
     await writeFile(path.join(root, 'src', 'main.py'), 'print(1)\n');
     await writeFile(path.join(root, 'private', 'hidden.py'), 'print(2)\n');
     await writeFile(path.join(root, 'node_modules', 'pkg', 'index.js'), 'const value = 3;\n');
-    const included = await collectUris(await workspaceEntries(), 10000);
+    const discovered: number[] = [];
+    const included = await collectUris(await workspaceEntries(undefined, undefined, count => discovered.push(count)), 10000);
     assert.deepEqual(included.files.map(file => file.path).sort(), ['node_modules/pkg/index.js', 'private/hidden.py', 'src/main.py']);
+    assert.deepEqual(discovered, [1, 2, 3]);
     const currentDocument = { uri: uri(path.join(root, 'src', 'main.py')), isUntitled: false, getText: () => 'print("unsaved editor snapshot")\n' };
     const active = await collectActiveDocument(currentDocument as never, 10000);
     assert.equal(active.files[0].content, 'print("unsaved editor snapshot")\n');

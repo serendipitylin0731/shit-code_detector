@@ -17,9 +17,18 @@ test('侧边栏只显示当前目标的操作入口，Webview 脚本可解析', 
   finally { loader._load = original; }
   assert.equal(manifest.contributes.views.shitCodeDetectorRight[0].id, SidebarProvider.viewId);
 
-  const webview = { options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (value: ReturnType<typeof uri>) => value, onDidReceiveMessage: () => undefined };
+  const states: unknown[] = [];
+  let onSidebarMessage: ((message: { action: string }) => void) | undefined;
+  const webview = { options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (value: ReturnType<typeof uri>) => value,
+    postMessage: (state: unknown) => { states.push(state); }, onDidReceiveMessage: (callback: (message: { action: string }) => void) => { onSidebarMessage = callback; } };
   const view = { webview, onDidDispose: () => undefined };
-  new SidebarProvider(async () => undefined, uri('extension') as never).resolveWebviewView(view as never);
+  const provider = new SidebarProvider(async () => undefined, uri('extension') as never);
+  provider.resolveWebviewView(view as never);
+  provider.setBusy(true, '本地规则 2/4 个文件', 50);
+  assert.equal((states.at(-1) as { progress: number }).progress, 50);
+  assert.equal((states.at(-1) as { busy: boolean }).busy, true);
+  onSidebarMessage?.({ action: 'ready' });
+  assert.equal((states.at(-1) as { message: string }).message, '本地规则 2/4 个文件');
   assert.match(webview.html, /id="targetRoot"/);
   assert.match(webview.html, /id="targetFile"/);
   assert.match(webview.html, /id="targetRepository"/);
@@ -31,6 +40,7 @@ test('侧边栏只显示当前目标的操作入口，Webview 脚本可解析', 
   assert.match(webview.html, /id="fileVoidToggle"/);
   assert.match(webview.html, /id="showMore"/);
   assert.match(webview.html, /id="progressPanel"/);
+  assert.match(webview.html, /id="summary"[^>]*>[^<]*<\/div><section class="progress-panel" id="progressPanel"/);
   assert.match(webview.html, /id="cancelScan"/);
   assert.doesNotMatch(webview.html, /id="previous"|id="next"|id="pageLabel"/);
   assert.match(webview.html, /\.grade-row\.voided, \.finding\.voided/);
@@ -81,6 +91,10 @@ test('侧边栏只显示当前目标的操作入口，Webview 脚本可解析', 
   assert.equal(nodes.get('progressPanel')?.hidden, false);
   assert.equal(nodes.get('progressTrack')?.attributes['aria-valuenow'], '50');
   assert.equal(nodes.get('progressFill')?.style.width, '50%');
+  assert.equal(nodes.get('progressPercent')?.textContent, '本阶段 50%');
+  onMessage({ data: { type: 'state', busy: true, message: '汇总本地与跨文件检查…' } });
+  assert.equal(nodes.get('progressPercent')?.textContent, '进行中');
+  assert.equal(nodes.get('progressTrack')?.attributes['aria-valuenow'], undefined);
   nodes.get('cancelScan')?.onclick?.();
   assert.equal((messages.at(-1) as { action: string }).action, 'cancelScan');
 

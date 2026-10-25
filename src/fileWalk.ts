@@ -3,7 +3,8 @@ import path from 'node:path';
 import { ignoredDirectories, isEligible } from './fileFilter';
 import { ScanConfig } from './scanConfig';
 
-export async function listCodePaths(root: string, checkCancelled?: () => void, config?: ScanConfig): Promise<string[]> {
+export async function listCodePaths(root: string, checkCancelled?: () => void, config?: ScanConfig,
+  onDiscovered?: (count: number) => void): Promise<string[]> {
   const entries: string[] = [];
   const configured = config && config.mode !== 'all';
   async function visit(directory: string): Promise<void> {
@@ -18,6 +19,7 @@ export async function listCodePaths(root: string, checkCancelled?: () => void, c
         await visit(absolute);
       } else if (item.isFile() && (!configured ? isEligible(relative) : config.allows(relative))) {
         entries.push(relative);
+        onDiscovered?.(entries.length);
       }
     }
   }
