@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { analyze, CodeFile } from '../src/analysis';
-import { analyzeWithAi, planAiRequests } from '../src/ai';
+import { AI_REVIEW_ROUNDS, analyzeWithAi, planAiRequests } from '../src/ai';
 import { splitAiFile } from '../src/aiChunks';
 import { AI_BASE_POINTS, AI_CRITERIA, FILE_AI_CRITERIA, gradePoints, PROJECT_AI_CRITERIA } from '../src/aiRubric';
 
@@ -24,6 +24,61 @@ test('固定评分表覆盖全部条目，A–E 基础分与权重由插件计�
   assert.equal(AI_CRITERIA.find(item => item.id === 'abstraction_fit')?.weight, 3);
   assert.equal(AI_CRITERIA.find(item => item.id === 'local_comprehensibility')?.weight, 3);
   assert.ok(!AI_CRITERIA.some(item => item.id === 'testability' || item.id === 'complexity_fit'));
+});
+
+test('文件审查三轮逐次带入先前判断，只用第三轮结论计分', async () => {
+  const original = globalThis.fetch;
+  const requests: { messages: { content: string }[] }[] = [];
+  const progress: number[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
+    requests.push(request);
+    const assessments = cleanFile('sample.py');
+    if (requests.length < 3) assessments[assessments.findIndex(item => item.criterion === 'semantic_naming')] = {
+      path: 'sample.py', criterion: 'semantic_naming', grade: requests.length === 1 ? 'C' : 'B', line: 1,
+      reason: requests.length === 1 ? '第一轮：第 1 行名称可能含糊。' : '第二轮：第 1 行名称可能稍含糊。'
+    } as typeof assessments[number];
+    return mockResponse(assessments);
+  };
+  try {
+    const result = await analyzeWithAi(analyze([source('sample.py', 'def run():\n    return 1')], [], false),
+      { ...options, onProgress: completed => progress.push(completed) }, false);
+    assert.equal(requests.length, AI_REVIEW_ROUNDS);
+    assert.ok(requests.every(request => request.messages[1].content.includes('def run():')));
+    assert.match(requests[1].messages[2].content, /第一轮：第 1 行名称可能含糊/);
+    assert.match(requests[2].messages[2].content, /第一轮：第 1 行名称可能含糊/);
+    assert.match(requests[2].messages[2].content, /第二轮：第 1 行名称可能稍含糊/);
+    assert.equal(result.assessments.find(item => item.criterion === 'semantic_naming')?.grade, 'A');
+    assert.equal(result.findings.length, 0);
+    assert.deepEqual(progress.slice(0, 4), [0, 1, 2, 3]);
+    assert.equal(result.fileRequests, 3);
+  } finally { globalThis.fetch = original; }
+});
+
+test('项目审查同样三轮，第三轮失败时前两轮不能冒充完成', async () => {
+  const original = globalThis.fetch;
+  const projectRequests: { messages: { content: string }[] }[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
+    if (!request.messages[1].content.startsWith('评估一个 <project>')) return mockResponse(cleanFile('sample.py'));
+    projectRequests.push(request);
+    if (projectRequests.length === 3) return new Response('rate limited', { status: 429 });
+    const assessments = cleanProject();
+    assessments[0] = { path: '<project>', criterion: 'module_boundaries', grade: 'C',
+      reason: `项目第 ${projectRequests.length} 轮：模块组织需要复核。`, evidencePaths: ['sample.py'] } as typeof assessments[number];
+    return mockResponse(assessments);
+  };
+  try {
+    const result = await analyzeWithAi(analyze([source('sample.py')]), options);
+    assert.equal(projectRequests.length, 3);
+    assert.match(projectRequests[2].messages[2].content, /项目第 1 轮/);
+    assert.match(projectRequests[2].messages[2].content, /项目第 2 轮/);
+    assert.equal(result.projectRequests, 3);
+    assert.equal(result.processedProjectRequests, 2);
+    assert.equal(result.reviewedProject, false);
+    assert.equal(result.assessments.find(item => item.criterion === 'module_boundaries')?.grade, 'U');
+    assert.ok(result.errors.some(error => error.includes('HTTP 429')));
+  } finally { globalThis.fetch = original; }
 });
 
 test('清晰长分支、局部重复和同一目的的多个步骤不被机械扣分', async () => {
@@ -303,7 +358,7 @@ test('长文件中间行被实际送审，未展示行号仍降为 U', async () 
     const result = await analyzeWithAi(analyze([file], [], false), { ...options, maxCharsPerRequest: 900 }, false);
     assert.equal(result.assessments.find(item => item.criterion === 'semantic_naming')?.grade, 'U');
     assert.equal(result.reviewedFiles, 0);
-    assert.equal(result.fileRequests, chunks.length);
+    assert.equal(result.fileRequests, chunks.length * AI_REVIEW_ROUNDS);
   } finally { globalThis.fetch = original; }
 });
 
@@ -343,7 +398,7 @@ test('同一文件跨片段缺陷只计最严重的一次，问题明细仍保�
     const result = await analyzeWithAi(analyze([file], [], false), { ...options, maxCharsPerRequest: 500 }, false);
     assert.equal(result.reviewedFiles, 1);
     assert.equal(result.assessments.find(item => item.criterion === 'semantic_naming')?.grade, 'D');
-    assert.equal(result.findings.filter(item => item.rule === 'ai-semantic_naming').length, result.fileRequests);
+    assert.equal(result.findings.filter(item => item.rule === 'ai-semantic_naming').length, result.fileRequests / AI_REVIEW_ROUNDS);
     assert.equal(result.findings.filter(item => item.rule === 'ai-semantic_naming').reduce((sum, item) => sum + item.points, 0), 6);
   } finally { globalThis.fetch = original; }
 });

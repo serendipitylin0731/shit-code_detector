@@ -13,7 +13,7 @@ export interface AiCriterion {
   anchors: Record<AiGrade, string>;
 }
 
-export const AI_RUBRIC_VERSION = '6.0';
+export const AI_RUBRIC_VERSION = '6.1';
 export const AI_BASE_POINTS: Readonly<Record<AiGrade, number>> = Object.freeze({ A: 0, B: 2, C: 4, D: 6, E: 10 });
 
 /** The only source for AI criteria, weights and grade anchors. */

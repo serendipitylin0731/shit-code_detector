@@ -146,8 +146,8 @@ export function activate(context: vscode.ExtensionContext): void {
               model: config.get<string>('ai.model', 'deepseek-flash'),
               apiKey,
               maxCharsPerRequest,
-              onProgress: (completed, total) => progress.report({ message: `AI 代码片段 ${completed}/${total}`, percentage: plan.stage('aiFiles', completed, total) }),
-              onProjectProgress: (completed, total) => progress.report({ message: `AI 项目结构 ${completed}/${total}`, percentage: plan.stage('aiProject', completed, total) })
+              onProgress: (completed, total) => progress.report({ message: `AI 文件审查轮次 ${completed}/${total}`, percentage: plan.stage('aiFiles', completed, total) }),
+              onProjectProgress: (completed, total) => progress.report({ message: `AI 项目审查轮次 ${completed}/${total}`, percentage: plan.stage('aiProject', completed, total) })
             }, projectMode, controller.signal);
           } finally { subscription.dispose(); }
           result = mergeAnalysis(result, ai.findings);

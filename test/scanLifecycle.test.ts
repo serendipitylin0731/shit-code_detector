@@ -64,14 +64,14 @@ test('侧边栏打开未返回时扫描仍启动，取消能结束正在等待�
       }
     };
     if (parent?.filename?.endsWith('/src/extension.js') && request === './ai') return {
-      planAiRequests: () => ({ fileRequests: 2, projectRequests: 2 }),
+      planAiRequests: () => ({ fileRequests: 6, projectRequests: 6 }),
       analyzeWithAi: async (_analysis: unknown, options: { onProgress: (completed: number, total: number) => void;
         onProjectProgress: (completed: number, total: number) => void }) => {
-        options.onProgress(0, 2); options.onProgress(1, 2); options.onProgress(2, 2);
-        options.onProjectProgress(0, 2); options.onProjectProgress(1, 2); options.onProjectProgress(2, 2);
+        for (let completed = 0; completed <= 6; completed++) options.onProgress(completed, 6);
+        for (let completed = 0; completed <= 6; completed++) options.onProjectProgress(completed, 6);
         return { findings: [], assessments: [], reviewedFiles: 1, processedFiles: 1, totalFiles: 1,
-          processedChars: 10, totalChars: 10, fileRequests: 2, reviewedProject: true,
-          projectRequests: 2, processedProjectRequests: 2, errors: [] };
+          processedChars: 10, totalChars: 10, fileRequests: 6, reviewedProject: true,
+          projectRequests: 6, processedProjectRequests: 6, errors: [] };
       }
     };
     if (parent?.filename?.endsWith('/src/extension.js') && request === './gitBaseline') return { compareGitBaseline: async () => undefined };
@@ -107,8 +107,8 @@ test('侧边栏打开未返回时扫描仍启动，取消能结束正在等待�
   const firstAiProgressIndex = progressValues.length;
   await command();
   const aiProgress = progressValues.slice(firstAiProgressIndex);
-  assert.ok(messages.includes('AI 代码片段 1/2'));
-  assert.ok(messages.includes('AI 项目结构 1/2'));
+  assert.ok(messages.includes('AI 文件审查轮次 1/6'));
+  assert.ok(messages.includes('AI 项目审查轮次 1/6'));
   for (const percent of [10, 20, 40, 60, 80, 100]) assert.ok(aiProgress.includes(percent), `缺少总进度 ${percent}%：${aiProgress}`);
   assert.equal(aiProgress.at(-1), 100);
   assert.ok(aiProgress.every((value, index) => index === 0 || value >= aiProgress[index - 1]));

@@ -57,7 +57,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.view = view;
     const mediaRoot = vscode.Uri.joinPath(this.extensionUri, 'media');
     view.webview.options = { enableScripts: true, localResourceRoots: [mediaRoot] };
-    view.webview.html = html(view.webview, view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'logo.svg')).toString());
+    view.webview.html = html(view.webview, view.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'logo-full.png')).toString());
     view.webview.onDidReceiveMessage((message: SidebarAction | { action: 'ready' }) => {
       if (message?.action === 'ready') { this.sendState(true); return; }
       void this.onAction(message as SidebarAction);
@@ -101,7 +101,7 @@ function html(webview: vscode.Webview, logoUrl: string): string {
   button { cursor: pointer; }
   .score-panel { position: sticky; top: 0; z-index: 2; padding: 13px 14px 14px; border: 1px solid var(--vscode-panel-border); border-radius: 12px; background: var(--vscode-editorWidget-background); box-shadow: 0 6px 24px #00000012; }
   .brand { display: flex; align-items: center; gap: 9px; min-height: 38px; }
-  .brand img { width: 36px; height: 36px; flex: 0 0 auto; }
+  .brand img { width: 58px; height: 38px; object-fit: contain; flex: 0 0 auto; }
   .brand-copy { flex: 1; min-width: 0; }
   .brand-title { font-size: 12px; font-weight: 750; letter-spacing: .01em; }
   .brand-sub { color: var(--vscode-descriptionForeground); font-size: 10px; margin-top: 2px; }

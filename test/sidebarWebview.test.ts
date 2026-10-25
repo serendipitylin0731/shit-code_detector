@@ -47,7 +47,7 @@ test('侧边栏只显示当前目标的操作入口，Webview 脚本可解析', 
   assert.match(webview.html, /id="cancelScan"/);
   assert.doesNotMatch(webview.html, /id="previous"|id="next"|id="pageLabel"/);
   assert.match(webview.html, /\.grade-row\.voided, \.finding\.voided/);
-  assert.match(webview.html, /extension\/media\/logo.svg/);
+  assert.match(webview.html, /extension\/media\/logo-full.png/);
   assert.doesNotMatch(webview.html, /id="workspace"|id="openAiConfig"|选择文件评分|根目录和选定文件使用/);
   const script = webview.html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)?.[1];
   assert.ok(script);
