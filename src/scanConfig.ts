@@ -4,6 +4,23 @@ const createIgnore = require('../vendor/ignore') as typeof ignore;
 type Rules = ignore.Ignore;
 
 export type ScanConfigMode = 'include' | 'exclude' | 'all';
+export type ScanRuleName = '.shitcode' | '.shitcode_ignore';
+export interface ScanRuleDraft { name: ScanRuleName; contents: string }
+
+export function validateScanRuleDraft(value: unknown): ScanRuleDraft {
+  if (!value || typeof value !== 'object') throw new Error('请先填写评分规则。');
+  const draft = value as Partial<ScanRuleDraft>;
+  if (draft.name !== '.shitcode' && draft.name !== '.shitcode_ignore') throw new Error('评分规则类型必须是 .shitcode 或 .shitcode_ignore。');
+  if (typeof draft.contents !== 'string' || Buffer.byteLength(draft.contents, 'utf8') > 1024 * 1024) {
+    throw new Error('评分规则必须是文本，且不能超过 1 MiB。');
+  }
+  return { name: draft.name, contents: draft.contents };
+}
+
+export function scanConfigFromDraft(value: unknown): ScanConfig {
+  const draft = validateScanRuleDraft(value);
+  return draft.name === '.shitcode' ? selectScanConfig(draft.contents) : selectScanConfig(undefined, draft.contents);
+}
 
 /** Root-level selection files use the same pattern and negation syntax as .gitignore. */
 export class ScanConfig {

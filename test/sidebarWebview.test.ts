@@ -34,6 +34,8 @@ test('侧边栏只显示当前目标的操作入口，Webview 脚本可解析', 
   assert.match(webview.html, /id="targetRoot"/);
   assert.match(webview.html, /id="targetFile"/);
   assert.match(webview.html, /id="targetRepository"/);
+  assert.match(webview.html, /id="ruleModeToggle"[^>]*role="switch"/);
+  assert.match(webview.html, /id="exportRule"/);
   assert.match(webview.html, /id="fileControls" hidden/);
   assert.match(webview.html, /id="repositoryControls" hidden/);
   assert.match(webview.html, /id="settingsPanel" hidden/);
@@ -66,6 +68,7 @@ test('侧边栏只显示当前目标的操作入口，Webview 脚本可解析', 
     childNodes: FakeNode[] = [];
     onclick?: () => void;
     onchange?: () => void;
+    oninput?: () => void;
     classList = { toggle: (name: string, present: boolean) => { this.className = present ? name : ''; } };
     setAttribute(name: string, value: string) { this.attributes[name] = value; }
     removeAttribute(name: string) { delete this.attributes[name]; }
@@ -90,6 +93,44 @@ test('侧边栏只显示当前目标的操作入口，Webview 脚本可解析', 
   assert.equal(nodes.get('fileControls')?.hidden, false);
   assert.equal(nodes.get('repositoryControls')?.hidden, true);
   assert.ok(onMessage);
+  nodes.get('targetRoot')?.onclick?.();
+  assert.equal(nodes.get('inlineRuleEditor')?.hidden, true);
+  nodes.get('rootSourceInline')?.onclick?.();
+  assert.equal(nodes.get('inlineRuleEditor')?.hidden, false);
+  assert.equal(nodes.get('ruleModeToggle')?.attributes['aria-checked'], 'true');
+  nodes.get('ruleText')!.value = 'private/\n'; nodes.get('ruleText')?.oninput?.();
+  nodes.get('ruleModeToggle')?.onclick?.();
+  assert.equal(nodes.get('ruleModeToggle')?.attributes['aria-checked'], 'false');
+  assert.equal(nodes.get('ruleText')?.value, '');
+  nodes.get('ruleText')!.value = 'src/main.py\n'; nodes.get('ruleText')?.oninput?.();
+  nodes.get('ruleModeToggle')?.onclick?.();
+  assert.equal(nodes.get('ruleText')?.value, 'private/\n');
+  nodes.get('ruleModeToggle')?.onclick?.();
+  nodes.get('scanWorkspace')?.onclick?.();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), { action: 'scanWorkspace', source: 'inline',
+    rule: { name: '.shitcode', contents: 'src/main.py\n' } });
+  nodes.get('exportRule')?.onclick?.();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), { action: 'exportRule',
+    rule: { name: '.shitcode', contents: 'src/main.py\n' } });
+  nodes.get('rootSourceWorkspace')?.onclick?.();
+  nodes.get('scanWorkspace')?.onclick?.();
+  assert.equal((messages.at(-1) as { source: string }).source, 'workspace');
+  nodes.get('targetRepository')?.onclick?.();
+  nodes.get('repoSourceInline')?.onclick?.();
+  nodes.get('repoUrl')!.value = 'https://example.com/repo.git';
+  nodes.get('ruleText')!.value = '*.tmp\n'; nodes.get('ruleText')?.oninput?.();
+  nodes.get('scanRepository')?.onclick?.();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), { action: 'scanRepository',
+    url: 'https://example.com/repo.git', source: 'inline', rule: { name: '.shitcode_ignore', contents: '*.tmp\n' } });
+  onMessage({ data: { type: 'importedRepositoryRule', rule: { name: '.shitcode', contents: 'src/*.py\n' } } });
+  assert.equal(nodes.get('ruleText')?.value, 'src/*.py\n');
+  assert.equal(nodes.get('ruleModeToggle')?.attributes['aria-checked'], 'false');
+  nodes.get('repoSourceAll')?.onclick?.();
+  nodes.get('scanRepository')?.onclick?.();
+  assert.equal((messages.at(-1) as { source: string }).source, 'all');
+  onMessage({ data: { type: 'loadedWorkspaceRule', rule: { name: '.shitcode_ignore', contents: 'build/\n' } } });
+  assert.equal(nodes.get('targetRoot')?.attributes['aria-pressed'], 'true');
+  assert.equal(nodes.get('ruleText')?.value, 'build/\n');
   onMessage({ data: { type: 'state', busy: true, message: '读取代码文件 1/2', progress: 50 } });
   assert.equal(nodes.get('progressPanel')?.hidden, false);
   assert.equal(nodes.get('progressTrack')?.attributes['aria-valuenow'], '50');

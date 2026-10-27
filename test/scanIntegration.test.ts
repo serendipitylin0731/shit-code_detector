@@ -31,6 +31,7 @@ test('当前项目与当前文件遵循新配置，旧 .gitignore 不参与筛�
   };
   moduleLoader._load = (request, parent, isMain) => request === 'vscode' ? vscode : originalLoad(request, parent, isMain);
   const { workspaceEntries, collectUris, applyScanConfigToSelections, collectActiveDocument } = require('../src/collect') as typeof import('../src/collect');
+  const { selectScanConfig } = require('../src/scanConfig') as typeof import('../src/scanConfig');
   moduleLoader._load = originalLoad;
   try {
     await mkdir(path.join(root, 'src'));
@@ -46,6 +47,10 @@ test('当前项目与当前文件遵循新配置，旧 .gitignore 不参与筛�
     const included = await collectUris(await workspaceEntries(undefined, undefined, count => discovered.push(count)), 10000);
     assert.deepEqual(included.files.map(file => file.path).sort(), ['node_modules/pkg/index.js', 'private/hidden.py', 'src/main.py']);
     assert.deepEqual(discovered, [1, 2, 3]);
+    const inline = await collectUris(await workspaceEntries(undefined, folder as never, undefined,
+      selectScanConfig('private/hidden.py\n')), 10000);
+    assert.deepEqual(inline.files.map(file => file.path), ['private/hidden.py']);
+    assert.equal((await readFile(path.join(root, '.shitcode'), 'utf8')).includes('src/main.py'), true);
     const currentDocument = { uri: uri(path.join(root, 'src', 'main.py')), isUntitled: false, getText: () => 'print("unsaved editor snapshot")\n' };
     const active = await collectActiveDocument(currentDocument as never, 10000);
     assert.equal(active.files[0].content, 'print("unsaved editor snapshot")\n');

@@ -42,14 +42,14 @@ export async function collectUris(entries: ScanEntry[], maxFileBytes: number, to
 }
 
 export async function workspaceEntries(token?: vscode.CancellationToken, selectedFolder?: vscode.WorkspaceFolder,
-  onDiscovered?: (count: number) => void): Promise<ScanEntry[]> {
+  onDiscovered?: (count: number) => void, configOverride?: ScanConfig): Promise<ScanEntry[]> {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders?.length) throw new Error('请先打开一个工作区。');
   const entries: ScanEntry[] = [];
   const multiRoot = folders.length > 1 && !selectedFolder;
   let visited = 0;
   for (const folder of selectedFolder ? [selectedFolder] : folders) {
-    const config = await readRootScanConfig(folder.uri);
+    const config = configOverride ?? await readRootScanConfig(folder.uri);
     const configured = config.mode !== 'all';
     async function visit(directory: vscode.Uri, relativeDirectory: string): Promise<void> {
       if (token?.isCancellationRequested) throw new vscode.CancellationError();

@@ -8,7 +8,7 @@ import { finalScore, formattedFinalScore, SCORE_FORMULA } from './scoreTransform
 import { summaryMetrics } from './summaryMetrics';
 import { compareGitBaseline, GitBaseline } from './gitBaseline';
 import { cloneRepository, collectActiveDocument, collectUris, directoryEntries, ScanEntry, validateRepositoryUrl, workspaceEntries } from './collect';
-import { ScanConfig, selectScanConfig } from './scanConfig';
+import { ScanConfig, ScanRuleDraft, scanConfigFromDraft, validateScanRuleDraft } from './scanConfig';
 import { dashboardFindings, fileScores } from './dashboardData';
 import { DashboardResult, SidebarAction, SidebarProvider } from './sidebar';
 import { assessmentVoidKey, buildVoidScoreModel, findingVoidKey } from './voidScore';
@@ -38,7 +38,7 @@ export function activate(context: vscode.ExtensionContext): void {
       sidebar.setActiveFileName(lastEditor ? path.basename(lastEditor.document.uri.path) : undefined);
     }));
 
-  async function run(scope: Scope, target?: { url?: string }): Promise<void> {
+  async function run(scope: Scope, target?: { url?: string; ruleSource?: 'workspace' | 'all' | 'inline'; rule?: ScanRuleDraft }): Promise<void> {
     if (running) return;
     running = true;
     let cleanup: (() => Promise<void>) | undefined;
@@ -81,7 +81,8 @@ export function activate(context: vscode.ExtensionContext): void {
         if (scope === 'workspace') {
           selectedWorkspace = vscode.workspace.workspaceFolders?.[0];
           if (!selectedWorkspace) throw new Error('请先打开一个工作区根目录。');
-          entries = await workspaceEntries(token, selectedWorkspace, onDiscovered);
+          const rule = target?.ruleSource === 'inline' ? scanConfigFromDraft(target.rule) : undefined;
+          entries = await workspaceEntries(token, selectedWorkspace, onDiscovered, rule);
           label = `当前项目：${selectedWorkspace.name}`;
         } else if (scope === 'files') {
           if (!editor) throw new Error('请先在编辑器中打开要评分的代码文件。');
@@ -97,11 +98,13 @@ export function activate(context: vscode.ExtensionContext): void {
           if (!input && target?.url === undefined) { sidebar.setBusy(false); return; }
           if (!input?.trim()) throw new Error('请输入 HTTPS Git 仓库地址。');
           const url = validateRepositoryUrl(input);
+          const rule = target?.ruleSource === 'inline' ? scanConfigFromDraft(target.rule) :
+            target?.ruleSource === 'all' ? undefined : repositoryConfig;
           progress.report({ message: '克隆 Git 仓库', percentage: plan.stage('discovery') });
           const clone = await cloneRepository(url, token);
           cleanup = clone.cleanup;
           progress.report({ message: '查找仓库代码文件…', percentage: plan.stage('discovery', 1, 2) });
-          entries = await directoryEntries(clone.directory, token, repositoryConfig, onDiscovered);
+          entries = await directoryEntries(clone.directory, token, rule, onDiscovered);
           label = url;
         }
         if (token.isCancellationRequested) throw new vscode.CancellationError();
@@ -249,8 +252,58 @@ export function activate(context: vscode.ExtensionContext): void {
     const bytes = await vscode.workspace.fs.readFile(chosen[0]);
     if (bytes.length > 1024 * 1024) throw new Error('评分规则文件不能超过 1 MiB。');
     const contents = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    repositoryConfig = name === '.shitcode' ? selectScanConfig(contents) : selectScanConfig(undefined, contents);
-    sidebar.setRepositoryConfigName(name);
+    const draft = validateScanRuleDraft({ name, contents });
+    repositoryConfig = scanConfigFromDraft(draft);
+    sidebar.setImportedRepositoryRule(draft);
+  }
+
+  async function loadWorkspaceRule(): Promise<void> {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (!root) throw new Error('请先打开一个工作区根目录。');
+    for (const name of ['.shitcode', '.shitcode_ignore'] as const) {
+      const uri = vscode.Uri.joinPath(root, name);
+      try {
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        if (bytes.length > 1024 * 1024) throw new Error(`${name} 不能超过 1 MiB。`);
+        const draft = validateScanRuleDraft({ name, contents: new TextDecoder('utf-8', { fatal: true }).decode(bytes) });
+        sidebar.setLoadedWorkspaceRule(draft);
+        return;
+      } catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound') continue;
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+    }
+    vscode.window.showInformationMessage('当前项目根目录没有 .shitcode 或 .shitcode_ignore。');
+  }
+
+  async function exportRule(value: unknown): Promise<void> {
+    const draft = validateScanRuleDraft(value);
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (!root) throw new Error('请先打开一个工作区根目录，再导出评分规则。');
+    const destination = vscode.Uri.joinPath(root, draft.name);
+    let exists = false;
+    try { await vscode.workspace.fs.stat(destination); exists = true; }
+    catch (error) {
+      if (!(error instanceof vscode.FileSystemError && error.code === 'FileNotFound') &&
+          (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (exists) {
+      const choice = await vscode.window.showWarningMessage(`当前项目根目录已存在 ${draft.name}，覆盖它吗？`, { modal: true }, '覆盖');
+      if (choice !== '覆盖') return;
+    }
+    await vscode.workspace.fs.writeFile(destination, new TextEncoder().encode(draft.contents));
+    let priorityNote = '';
+    if (draft.name === '.shitcode_ignore') {
+      try {
+        await vscode.workspace.fs.stat(vscode.Uri.joinPath(root, '.shitcode'));
+        priorityNote = '当前根目录仍有 .shitcode，项目扫描会优先使用它。';
+      } catch (error) {
+        if (!(error instanceof vscode.FileSystemError && error.code === 'FileNotFound') &&
+            (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    vscode.window.showInformationMessage(`${draft.name} 已导出到当前项目根目录。${priorityNote}`);
   }
 
   async function showReport(): Promise<void> {
@@ -272,11 +325,13 @@ export function activate(context: vscode.ExtensionContext): void {
   async function handleSidebarAction(message: SidebarAction): Promise<void> {
     try {
       switch (message.action) {
-        case 'scanWorkspace': await run('workspace'); break;
+        case 'scanWorkspace': await run('workspace', { ruleSource: message.source, rule: message.rule }); break;
         case 'scanFiles': await run('files'); break;
-        case 'scanRepository': await run('repository', { url: message.url }); break;
+        case 'scanRepository': await run('repository', { url: message.url, ruleSource: message.source, rule: message.rule }); break;
         case 'importRepositoryConfig': await importRepositoryConfig(); break;
-        case 'clearRepositoryConfig': repositoryConfig = undefined; sidebar.setRepositoryConfigName(undefined); break;
+        case 'clearRepositoryConfig': repositoryConfig = undefined; break;
+        case 'loadWorkspaceRule': await loadWorkspaceRule(); break;
+        case 'exportRule': await exportRule(message.rule); break;
         case 'setApiKey': await vscode.commands.executeCommand('shitCodeDetector.setApiKey'); break;
         case 'openSettings': await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:serendipitylin0731.shit-code-detector'); break;
         case 'openReport': await showReport(); break;

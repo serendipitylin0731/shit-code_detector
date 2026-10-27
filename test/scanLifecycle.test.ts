@@ -7,7 +7,9 @@ test('侧边栏打开未返回时扫描仍启动，取消能结束正在等待�
   const commands = new Map<string, () => Promise<void>>();
   const messages: string[] = [];
   const progressValues: number[] = [];
-  let mode: 'cancel' | 'complete' | 'ai' = 'cancel';
+  let mode: 'cancel' | 'complete' | 'ai' | 'repository' = 'cancel';
+  let workspaceRule: import('../src/scanConfig').ScanConfig | undefined;
+  let repositoryRule: import('../src/scanConfig').ScanConfig | undefined;
   let completedScore: number | undefined;
   let started!: () => void;
   const collectionStarted = new Promise<void>(resolve => { started = resolve; });
@@ -22,7 +24,7 @@ test('侧边栏打开未返回时扫描仍启动，取消能结束正在等待�
   }
   class SidebarProvider {
     static viewId = 'fake';
-    constructor(readonly onAction: (action: { action: string }) => Promise<void>) { sidebar = this; }
+    constructor(readonly onAction: (action: import('../src/sidebar').SidebarAction) => Promise<void>) { sidebar = this; }
     setActiveFileName(): void {}
     setApiKeyConfigured(): void {}
     setBusy(_busy: boolean, message: string, progress?: number): void {
@@ -45,10 +47,17 @@ test('侧边栏打开未返回时扫描仍启动，取消能结束正在等待�
     if (request === 'vscode') return vscode;
     if (parent?.filename?.endsWith('/src/extension.js') && request === './sidebar') return { SidebarProvider };
     if (parent?.filename?.endsWith('/src/extension.js') && request === './collect') return {
-      workspaceEntries: (token: CancellationTokenSource['token']) => {
+      workspaceEntries: (token: CancellationTokenSource['token'], _folder: unknown, _discovered: unknown,
+        rule?: import('../src/scanConfig').ScanConfig) => {
+        workspaceRule = rule;
         if (mode !== 'cancel') return Promise.resolve([{}]);
         started(); return new Promise<never>((_resolve, reject) => token.onCancellationRequested(() => reject(new CancellationError())));
       },
+      directoryEntries: async (_root: string, _token: unknown, rule?: import('../src/scanConfig').ScanConfig) => {
+        repositoryRule = rule; return [{}];
+      },
+      cloneRepository: async () => ({ directory: '/tmp/repository', cleanup: async () => undefined }),
+      validateRepositoryUrl: (url: string) => url,
       collectUris: async (_entries: unknown, _limit: unknown, _token: unknown, _flag: unknown, onProgress: (completed: number, total: number) => void) => {
         onProgress(1, 1);
         return { files: [{ path: 'a.py', language: 'Python', content: 'value = 1\n' }],
@@ -112,4 +121,19 @@ test('侧边栏打开未返回时扫描仍启动，取消能结束正在等待�
   for (const percent of [10, 20, 40, 60, 80, 100]) assert.ok(aiProgress.includes(percent), `缺少总进度 ${percent}%：${aiProgress}`);
   assert.equal(aiProgress.at(-1), 100);
   assert.ok(aiProgress.every((value, index) => index === 0 || value >= aiProgress[index - 1]));
+  mode = 'complete';
+  await sidebar.onAction({ action: 'scanWorkspace', source: 'inline', rule: { name: '.shitcode', contents: 'a.py\n' } });
+  assert.equal(workspaceRule?.mode, 'include');
+  assert.equal(workspaceRule?.allows('a.py'), true);
+  assert.equal(workspaceRule?.allows('other.py'), false);
+  await sidebar.onAction({ action: 'scanWorkspace', source: 'workspace' });
+  assert.equal(workspaceRule, undefined);
+  mode = 'repository';
+  await sidebar.onAction({ action: 'scanRepository', url: 'https://example.com/repo.git', source: 'inline',
+    rule: { name: '.shitcode_ignore', contents: 'private/\n' } });
+  assert.equal(repositoryRule?.mode, 'exclude');
+  assert.equal(repositoryRule?.allows('private/key.py'), false);
+  assert.equal(repositoryRule?.allows('a.py'), true);
+  await sidebar.onAction({ action: 'scanRepository', url: 'https://example.com/repo.git', source: 'all' });
+  assert.equal(repositoryRule, undefined);
 });

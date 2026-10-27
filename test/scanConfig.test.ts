@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { loadScanConfig, selectScanConfig } from '../src/scanConfig';
+import { loadScanConfig, scanConfigFromDraft, selectScanConfig, validateScanRuleDraft } from '../src/scanConfig';
 import { listCodePaths } from '../src/fileWalk';
 
 test('.shitcode 是允许列表，使用与 .gitignore 相同的路径和否定规则', () => {
@@ -26,6 +26,14 @@ test('.shitcode_ignore 是排除列表，未列出的文件仍参与评分', () 
   assert.equal(config.allows('src/main.py'), true);
   assert.equal(config.allows('src/secret.generated.py'), false);
   assert.equal(config.allows('src/keep.generated.py'), true);
+});
+
+test('界面草稿仅接受两种规则名，按所选模式即时解析', () => {
+  assert.equal(scanConfigFromDraft({ name: '.shitcode', contents: 'src/main.py\n' }).allows('src/main.py'), true);
+  assert.equal(scanConfigFromDraft({ name: '.shitcode', contents: 'src/main.py\n' }).allows('other.py'), false);
+  assert.equal(scanConfigFromDraft({ name: '.shitcode_ignore', contents: 'private/\n' }).allows('private/key.py'), false);
+  assert.throws(() => validateScanRuleDraft({ name: '../escape', contents: 'src/' }), /类型/);
+  assert.throws(() => validateScanRuleDraft({ name: '.shitcode', contents: 'a'.repeat(1024 * 1024 + 1) }), /1 MiB/);
 });
 
 test('两份配置同时存在时只读取 .shitcode；空允许列表也不回退', async () => {
